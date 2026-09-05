@@ -1,0 +1,35 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  background: #0f0f1a;
+  color: #e8e8ff;
+  min-height: 100vh;
+}
+
+:root {
+  --accent: #6c63ff;
+  --accent-dim: rgba(108, 99, 255, 0.15);
+  --surface: #1a1a2e;
+  --surface-2: #16213e;
+  --text: #e8e8ff;
+  --text-dim: #888;
+  --danger: #e74c3c;
+  --success: #2ecc71;
+  --radius: 12px;
+}
+
+button {
+  font-family: inherit;
+  cursor: pointer;
+  border: none;
+  outline: none;
+}
+
+input, textarea {
+  font-family: inherit;
+}

@@ -1,0 +1,10 @@
+{
+  "adapter_id": "torgo_cluster_english_v1",
+  "type": "CLUSTER",
+  "language_code": "en",
+  "severity_cluster": null,
+  "base_model": "openai/whisper-small",
+  "parent_adapter_id": null,
+  "version": 1,
+  "weights_file": "adapter_model.bin"
+}

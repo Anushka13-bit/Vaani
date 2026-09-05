@@ -1,0 +1,47 @@
+# ── Adapter weights (large binary, never commit) ──────────────────────────────
+# Drop your trained .bin / .safetensors files into the adapter directories below.
+# The adapter_manifest.json and README.md in each directory are committed —
+# the weights themselves are not.
+training-backend/ml/adapters/**/adapter_model.bin
+training-backend/ml/adapters/**/adapter_model.safetensors
+training-backend/ml/adapters/**/*.bin
+training-backend/ml/adapters/**/*.safetensors
+
+# ── Runtime / generated ───────────────────────────────────────────────────────
+training-backend/vaanimitra.db
+training-backend/storage_data/
+training-backend/__pycache__/
+training-backend/**/__pycache__/
+training-backend/**/*.pyc
+training-backend/.env
+training-backend/.env.local
+
+# ── Node / React Native ───────────────────────────────────────────────────────
+mobile-app/node_modules/
+mobile-app/.expo/
+mobile-app/.bundle/
+mobile-app/android/build/
+mobile-app/android/app/build/
+mobile-app/android/.gradle/
+mobile-app/android/local.properties
+mobile-app/ios/Pods/
+mobile-app/ios/build/
+mobile-app/*.jks
+mobile-app/**/*.jks
+mobile-app/android/app/google-services.json
+
+# ── macOS ─────────────────────────────────────────────────────────────────────
+.DS_Store
+**/.DS_Store
+
+# ── IDEs ──────────────────────────────────────────────────────────────────────
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+
+# ── Caregiver dashboard ───────────────────────────────────────────────────────
+caregiver-dashboard/node_modules/
+caregiver-dashboard/dist/
+caregiver-dashboard/build/

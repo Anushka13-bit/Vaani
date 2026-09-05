@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    AccessibilityService configuration for AccessibilityActionService.
+    Controls which events the service receives and which packages it can act on.
+
+    Key settings:
+    - accessibilityEventTypes: TYPE_VIEW_FOCUSED + TYPE_WINDOW_STATE_CHANGED
+      → Notified when any text field is focused or a new window opens.
+    - accessibilityFeedbackType: feedbackGeneric
+      → We don't produce TTS feedback from this service (that's SpeakBackManager).
+    - canRetrieveWindowContent: true
+      → Required to traverse the view hierarchy and find editable text fields.
+    - notificationTimeout: 100ms
+      → How long to wait before coalescing events.
+
+    Per spec §7: No audio, camera, or screen pixel access is requested here.
+    The service only reads and acts on the UI view hierarchy.
+-->
+<accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    android:accessibilityEventTypes="typeViewFocused|typeWindowStateChanged|typeViewTextChanged"
+    android:accessibilityFeedbackType="feedbackGeneric"
+    android:accessibilityFlags="flagDefault|flagReportViewIds"
+    android:canRetrieveWindowContent="true"
+    android:description="@string/accessibility_service_description"
+    android:notificationTimeout="100"
+    android:settingsActivity=".MainActivity" />
