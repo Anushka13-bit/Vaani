@@ -2,23 +2,17 @@ package com.vaanimitra.bridge
 
 import com.facebook.react.bridge.*
 import com.facebook.react.module.annotations.ReactModule
-import com.vaanimitra.stt.AdapterManager
-import com.vaanimitra.stt.AdapterType
-import com.vaanimitra.stt.WhisperInferenceEngine
+import com.vaanimitra.VaaniMitraComponents
+import com.vaanimitra.nlu.PhrasebookSync
+import com.vaanimitra.stt.AdapterDownloader
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import android.content.Intent
+import android.provider.Settings
 import android.util.Log
+import org.json.JSONObject
 
-/**
- * SpeechModule — @ReactModule exposing STT and adapter APIs to React Native (§2.2).
- *
- * This is the primary bridge between the RN JS layer and the native STT engine.
- * All methods are @ReactMethod — called via promise from SpeechBridge.ts.
- *
- * Build risk note (§9): Get a trivial "ping" round-trip working first before
- * adding real STT logic. The ping() method below serves this purpose.
- */
 @ReactModule(name = SpeechModule.NAME)
 class SpeechModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -30,23 +24,16 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
 
     override fun getName(): String = NAME
 
-    private val adapterManager by lazy { AdapterManager(reactContext) }
-    private val whisperEngine by lazy { WhisperInferenceEngine(reactContext) }
+    private val adapterManager by lazy { VaaniMitraComponents.adapterManager(reactContext) }
+    private val whisperEngine by lazy { VaaniMitraComponents.whisperEngine(reactContext) }
+    private val phrasebookMatcher by lazy { VaaniMitraComponents.phrasebookMatcher() }
     private val scope = CoroutineScope(Dispatchers.Main)
 
-    // ── Ping (bridge smoke test) ──────────────────────────────────────────────
-
-    /**
-     * Trivial round-trip for bridge validation.
-     * In RN: SpeechModule.ping().then(r => console.log(r)) → "pong"
-     */
     @ReactMethod
     fun ping(promise: Promise) {
         Log.d(TAG, "ping() called from RN")
         promise.resolve("pong")
     }
-
-    // ── Adapter loading ───────────────────────────────────────────────────────
 
     @ReactMethod
     fun loadUserAdapter(userId: String, promise: Promise) {
@@ -76,15 +63,77 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    // ── File transcription (calibration review) ───────────────────────────────
+    @ReactMethod
+    fun downloadAndLoadClusterAdapter(
+        downloadUrl: String,
+        authToken: String,
+        languageCode: String,
+        serverAdapterId: String,
+        version: Int,
+        promise: Promise,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val bytes = AdapterDownloader.downloadBytes(downloadUrl, authToken)
+                adapterManager.saveLanguageAdapterBytes(languageCode, bytes)
+                adapterManager.persistActiveConfig(
+                    languageCode = languageCode,
+                    clusterAdapterId = serverAdapterId,
+                    clusterVersion = version,
+                )
+                val handle = adapterManager.loadLanguageAdapter(languageCode, serverAdapterId)
+                whisperEngine.activeAdapterPath = handle.filePath
+                promise.resolve(adapterHandleToMap(handle))
+                Log.i(TAG, "Cluster adapter loaded: $serverAdapterId")
+            } catch (e: Exception) {
+                Log.e(TAG, "downloadAndLoadClusterAdapter failed: ${e.message}")
+                promise.reject("ADAPTER_DOWNLOAD_FAILED", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun downloadAndLoadUserAdapter(
+        downloadUrl: String,
+        authToken: String,
+        userId: String,
+        version: Int,
+        promise: Promise,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val bytes = AdapterDownloader.downloadBytes(downloadUrl, authToken)
+                adapterManager.saveUserAdapterBytes(userId, bytes, version)
+                val handle = adapterManager.loadUserAdapter(userId)
+                whisperEngine.activeAdapterPath = handle.filePath
+                promise.resolve(adapterHandleToMap(handle))
+                Log.i(TAG, "User adapter loaded for $userId")
+            } catch (e: Exception) {
+                Log.e(TAG, "downloadAndLoadUserAdapter failed: ${e.message}")
+                promise.reject("ADAPTER_DOWNLOAD_FAILED", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun restorePersistedAdapters(promise: Promise) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val handles = adapterManager.restorePersistedStack()
+                whisperEngine.activeAdapterPath = handles.firstOrNull()?.filePath
+                val array = Arguments.createArray()
+                handles.forEach { array.pushMap(adapterHandleToMap(it)) }
+                promise.resolve(array)
+            } catch (e: Exception) {
+                promise.reject("ADAPTER_RESTORE_FAILED", e.message, e)
+            }
+        }
+    }
 
     @ReactMethod
     fun transcribeFile(audioFilePath: String, promise: Promise) {
         scope.launch(Dispatchers.IO) {
             try {
-                // Load PCM from file
-                // TODO: Use MediaExtractor or ffmpeg-android to decode audio files.
-                // For now, load raw .pcm files (16kHz mono int16).
                 val file = java.io.File(audioFilePath)
                 if (!file.exists()) {
                     promise.reject("FILE_NOT_FOUND", "Audio file not found: $audioFilePath")
@@ -109,26 +158,66 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    // ── Adapter info ──────────────────────────────────────────────────────────
-
     @ReactMethod
     fun getCurrentAdapterInfo(promise: Promise) {
-        val adapters = adapterManager.currentStackedAdapters()
-        val array = Arguments.createArray()
-        adapters.forEach { array.pushMap(adapterHandleToMap(it)) }
-        promise.resolve(array)
+        scope.launch(Dispatchers.IO) {
+            val adapters = adapterManager.currentStackedAdapters()
+            val resolved = if (adapters.isEmpty()) {
+                adapterManager.restorePersistedStack()
+            } else {
+                adapters
+            }
+            val array = Arguments.createArray()
+            resolved.forEach { array.pushMap(adapterHandleToMap(it)) }
+            promise.resolve(array)
+        }
     }
-
-    // ── Phrasebook mirror sync ────────────────────────────────────────────────
 
     @ReactMethod
     fun syncPhrasebookEntry(entryJson: String, promise: Promise) {
-        // TODO: Deserialize and push to PhrasebookMatcher native cache
-        Log.d(TAG, "syncPhrasebookEntry: $entryJson")
+        try {
+            val entry = JSONObject(entryJson)
+            val trigger = entry.optString("triggerPhrase", "").trim()
+            if (trigger.isEmpty()) {
+                promise.reject("PHRASEBOOK_SYNC_FAILED", "Missing triggerPhrase")
+                return
+            }
+            val intent = PhrasebookSync.entryToIntent(entry)
+            phrasebookMatcher.syncEntry(trigger, intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("PHRASEBOOK_SYNC_FAILED", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun syncPhrasebookBulk(entriesJson: String, promise: Promise) {
+        try {
+            PhrasebookSync.syncBulk(phrasebookMatcher, entriesJson)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("PHRASEBOOK_SYNC_FAILED", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun removePhrasebookEntry(triggerPhrase: String, promise: Promise) {
+        phrasebookMatcher.removeEntry(triggerPhrase)
         promise.resolve(true)
     }
 
-    // ── Helpers ───────────────────────────────────────────────────────────────
+    @ReactMethod
+    fun openVoiceInputSettings(promise: Promise) {
+        try {
+            val intent = Intent(Settings.ACTION_INPUT_METHOD_SETTINGS).apply {
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactContext.startActivity(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("SETTINGS_OPEN_FAILED", e.message, e)
+        }
+    }
 
     private fun adapterHandleToMap(handle: com.vaanimitra.stt.AdapterHandle): WritableMap =
         Arguments.createMap().apply {

@@ -1,6 +1,5 @@
 /**
  * VaaniMitra — App.tsx
- * Navigation root. Handles auth bootstrapping and main nav stack.
  */
 import React, { useEffect, useState } from 'react';
 import { ActivityIndicator, StatusBar, View } from 'react-native';
@@ -12,6 +11,7 @@ import DeviceInfo from 'react-native-device-info';
 import { backendClient } from './api/trainingBackendClient';
 import { LocalDb } from './storage/localDb';
 import { useStore } from './state/store';
+import { restoreAdaptersOnBoot, syncPhrasebookToNative } from './services/adapterService';
 
 import CalibrationScreen from './screens/CalibrationScreen';
 import SettingsScreen from './screens/SettingsScreen';
@@ -42,25 +42,21 @@ const DARK_THEME = {
 };
 
 export default function App() {
-  const { setAuth, setPreferredLanguage, setCorrectionSyncOptIn } = useStore();
+  const { setAuth, setPreferredLanguage, setCorrectionSyncOptIn, setActiveAdapters, setEntries } = useStore();
   const [ready, setReady] = useState(false);
 
-  // Bootstrap: load cached auth or register device
   useEffect(() => {
     (async () => {
       try {
-        // Load persisted settings
         const settings = await LocalDb.loadSettings();
         if (settings?.preferredLanguage) setPreferredLanguage(settings.preferredLanguage as string);
         if (settings?.correctionSyncOptIn) setCorrectionSyncOptIn(settings.correctionSyncOptIn as boolean);
 
-        // Load persisted auth
         const auth = await LocalDb.loadAuth();
         if (auth && new Date(auth.expiresAt) > new Date()) {
           backendClient.setToken(auth.accessToken);
           setAuth(auth.userId, auth.accessToken);
         } else {
-          // Register device
           const deviceId = await DeviceInfo.getUniqueId();
           const resp = await backendClient.auth.registerDevice({
             device_id: deviceId,
@@ -73,6 +69,13 @@ export default function App() {
           });
           setAuth(resp.user_id, resp.access_token);
         }
+
+        const adapters = await restoreAdaptersOnBoot();
+        if (adapters.length > 0) setActiveAdapters(adapters);
+
+        const phrasebook = await LocalDb.loadPhrasebook();
+        setEntries(phrasebook);
+        await syncPhrasebookToNative(phrasebook);
       } catch (e) {
         console.error('[App] Bootstrap failed:', e);
       } finally {

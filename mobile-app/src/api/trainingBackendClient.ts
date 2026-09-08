@@ -56,6 +56,10 @@ class TrainingBackendClient {
     this.token = token;
   }
 
+  getToken(): string | null {
+    return this.token;
+  }
+
   // ── Auth ────────────────────────────────────────────────────────────────────
 
   auth = {

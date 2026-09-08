@@ -35,6 +35,15 @@ class WhisperInferenceEngine(private val context: Context) : SttEngine {
     @Volatile
     var activeAdapterPath: String? = null
 
+    fun isOnnxModelAvailable(): Boolean {
+        return try {
+            context.assets.open(MODEL_ASSET).close()
+            true
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /**
      * STUB — returns a mock TranscriptionResult.
      * Replace this implementation with real ONNX Runtime inference (see TODO above).

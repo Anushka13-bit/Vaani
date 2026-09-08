@@ -4,7 +4,7 @@
  * The native Room DB mirror is updated via SpeechModule.syncPhrasebookEntry().
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import type { PhrasebookEntry, CorrectionRecord } from '../native/types';
+import type { PhrasebookEntry, CorrectionRecord, AdapterHandle } from '../native/types';
 
 // ── Keys ──────────────────────────────────────────────────────────────────────
 
@@ -13,6 +13,7 @@ const KEYS = {
   SETTINGS: 'vaani:settings',
   PHRASEBOOK: 'vaani:phrasebook',
   CORRECTIONS: 'vaani:corrections',
+  ADAPTERS: 'vaani:active_adapters',
 } as const;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -95,5 +96,20 @@ export const LocalDb = {
   async getUnsyncedCorrections(): Promise<CorrectionRecord[]> {
     const all = await LocalDb.loadCorrections();
     return all.filter(r => !r.syncedToBackend);
+  },
+
+  // ── Active adapters ────────────────────────────────────────────────────────
+
+  async saveActiveAdapters(adapters: AdapterHandle[]): Promise<void> {
+    await AsyncStorage.setItem(KEYS.ADAPTERS, JSON.stringify(adapters));
+  },
+
+  async loadActiveAdapters(): Promise<AdapterHandle[]> {
+    const raw = await AsyncStorage.getItem(KEYS.ADAPTERS);
+    return raw ? JSON.parse(raw) : [];
+  },
+
+  async clearActiveAdapters(): Promise<void> {
+    await AsyncStorage.removeItem(KEYS.ADAPTERS);
   },
 };

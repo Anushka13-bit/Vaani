@@ -6,17 +6,18 @@ import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.uimanager.ViewManager
 import com.facebook.react.bridge.*
 import com.facebook.react.module.annotations.ReactModule
+import com.vaanimitra.VaaniMitraComponents
 import com.vaanimitra.actions.AccessibilityActionService
+import com.vaanimitra.nlu.ActionType
+import com.vaanimitra.nlu.ParsedIntent
 import android.content.Intent
 import android.provider.Settings
 import android.util.Log
-import com.vaanimitra.nlu.ActionType
-import com.vaanimitra.nlu.ParsedIntent
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import org.json.JSONObject
 
-/**
- * AccessibilityModule — @ReactModule exposing accessibility service state + action execution to RN (§2.2).
- */
 @ReactModule(name = AccessibilityModule.NAME)
 class AccessibilityModule(private val reactContext: ReactApplicationContext) :
     ReactContextBaseJavaModule(reactContext) {
@@ -25,6 +26,8 @@ class AccessibilityModule(private val reactContext: ReactApplicationContext) :
         const val NAME = "AccessibilityModule"
         private const val TAG = "AccessibilityModule"
     }
+
+    private val scope = CoroutineScope(Dispatchers.Main)
 
     override fun getName(): String = NAME
 
@@ -59,7 +62,11 @@ class AccessibilityModule(private val reactContext: ReactApplicationContext) :
         try {
             val json = JSONObject(intentJson)
             val actionStr = json.optString("action", "UNKNOWN")
-            val action = try { ActionType.valueOf(actionStr) } catch (_: Exception) { ActionType.UNKNOWN }
+            val action = try {
+                ActionType.valueOf(actionStr)
+            } catch (_: Exception) {
+                ActionType.UNKNOWN
+            }
 
             val entitiesJson = json.optJSONObject("entities")
             val entities = mutableMapOf<String, String>()
@@ -72,25 +79,41 @@ class AccessibilityModule(private val reactContext: ReactApplicationContext) :
                 requiresConfirmation = json.optBoolean("requiresConfirmation", false),
             )
 
-            // Dispatch to AccessibilityActionService if available
-            val service = AccessibilityActionService.instance
-            if (service != null && intent.action == ActionType.DICTATE_TEXT) {
-                val text = entities["text"] ?: ""
-                val result = service.fillFocusedField(text)
-                val map = Arguments.createMap().apply {
-                    putBoolean("success", result)
-                    putString("message", if (result) "Field filled" else "Field not found")
-                    putBoolean("requiresAccessibilityFallback", false)
+            scope.launch(Dispatchers.IO) {
+                try {
+                    if (intent.action == ActionType.DICTATE_TEXT) {
+                        val service = AccessibilityActionService.instance
+                        val text = entities["text"] ?: ""
+                        if (service != null) {
+                            val result = service.fillFocusedField(text)
+                            val map = Arguments.createMap().apply {
+                                putBoolean("success", result)
+                                putString("message", if (result) "Field filled" else "Field not found")
+                                putBoolean("requiresAccessibilityFallback", false)
+                            }
+                            promise.resolve(map)
+                        } else {
+                            promise.reject(
+                                "ACCESSIBILITY_NOT_ENABLED",
+                                "Enable VaaniMitra Accessibility to dictate into other apps",
+                            )
+                        }
+                        return@launch
+                    }
+
+                    val actionResult = VaaniMitraComponents
+                        .actionExecutor(reactContext)
+                        .execute(intent)
+
+                    val map = Arguments.createMap().apply {
+                        putBoolean("success", actionResult.success)
+                        putString("message", actionResult.message)
+                        putBoolean("requiresAccessibilityFallback", actionResult.requiresAccessibilityFallback)
+                    }
+                    promise.resolve(map)
+                } catch (e: Exception) {
+                    promise.reject("INTENT_EXECUTION_FAILED", e.message, e)
                 }
-                promise.resolve(map)
-            } else {
-                // Non-accessibility intents are handled by AndroidIntentActions (via ActionExecutor)
-                val map = Arguments.createMap().apply {
-                    putBoolean("success", true)
-                    putString("message", "Intent dispatched: $actionStr")
-                    putBoolean("requiresAccessibilityFallback", false)
-                }
-                promise.resolve(map)
             }
         } catch (e: Exception) {
             Log.e(TAG, "executeParsedIntent failed: ${e.message}")

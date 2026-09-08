@@ -5,31 +5,19 @@ import android.os.Bundle
 import android.speech.RecognitionService
 import android.speech.SpeechRecognizer
 import android.util.Log
+import com.vaanimitra.VaaniMitraComponents
 import com.vaanimitra.audio.AudioCaptureManager
 import com.vaanimitra.audio.VoiceActivityDetector
-import com.vaanimitra.stt.AdapterManager
-import com.vaanimitra.stt.ConfidenceScorer
-import com.vaanimitra.stt.TranscriptionResult
-import com.vaanimitra.stt.WhisperInferenceEngine
+import com.vaanimitra.nlu.ActionType
+import com.vaanimitra.stt.AndroidSpeechRecognizerFallback
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
- * PersonalizedRecognitionService — extends android.speech.RecognitionService.
- * Registered in AndroidManifest.xml as the custom STT provider.
- *
- * This is the system-wide dictation path (§3.2). It does NOT go through the
- * React Native layer at runtime — Android routes STT requests directly here.
- *
- * Must be declared in AndroidManifest.xml:
- *   <service android:name=".recognition.PersonalizedRecognitionService"
- *            android:permission="android.permission.BIND_RECOGNITION_SERVICE">
- *       <intent-filter>
- *           <action android:name="android.speech.RecognitionService"/>
- *       </intent-filter>
- *   </service>
+ * PersonalizedRecognitionService — system-wide STT + voice command dispatch.
  */
 class PersonalizedRecognitionService : RecognitionService() {
 
@@ -38,64 +26,101 @@ class PersonalizedRecognitionService : RecognitionService() {
     }
 
     private val scope = CoroutineScope(Dispatchers.Main + Job())
-    private lateinit var engine: WhisperInferenceEngine
-    private lateinit var adapterManager: AdapterManager
     private lateinit var captureManager: AudioCaptureManager
     private lateinit var vad: VoiceActivityDetector
-    private lateinit var scorer: ConfidenceScorer
 
     override fun onCreate() {
         super.onCreate()
-        engine = WhisperInferenceEngine(applicationContext)
-        adapterManager = AdapterManager(applicationContext)
         captureManager = AudioCaptureManager()
         vad = VoiceActivityDetector()
-        scorer = ConfidenceScorer()
-        Log.i(TAG, "PersonalizedRecognitionService created")
+
+        val adapterManager = VaaniMitraComponents.adapterManager(applicationContext)
+        val engine = VaaniMitraComponents.whisperEngine(applicationContext)
+        val restored = adapterManager.restorePersistedStack()
+        engine.activeAdapterPath = restored.firstOrNull()?.filePath
+
+        Log.i(TAG, "PersonalizedRecognitionService created — restored ${restored.size} adapter(s)")
     }
 
     override fun onStartListening(recognizerIntent: Intent?, listener: Callback?) {
         Log.d(TAG, "onStartListening")
         listener?.readyForSpeech(Bundle())
 
-        scope.launch(Dispatchers.IO) {
+        scope.launch {
             try {
-                // Capture audio
-                val rawPcm = captureManager.captureSeconds(8)
+                val engine = VaaniMitraComponents.whisperEngine(applicationContext)
+                val adapterManager = VaaniMitraComponents.adapterManager(applicationContext)
+                val phrasebookMatcher = VaaniMitraComponents.phrasebookMatcher()
+                val intentParser = VaaniMitraComponents.intentParser()
+                val actionExecutor = VaaniMitraComponents.actionExecutor(applicationContext)
 
-                // VAD — trim silence
-                val speechPcm = vad.trimSilence(rawPcm)
-                listener?.beginningOfSpeech()
+                if (adapterManager.currentStackedAdapters().isEmpty()) {
+                    adapterManager.restorePersistedStack()
+                }
+                engine.activeAdapterPath = adapterManager.currentStackedAdapters().firstOrNull()?.filePath
 
-                // Transcribe
-                val result: TranscriptionResult = engine.transcribe(speechPcm)
-
-                // Score confidence
-                val scoredSegments = scorer.score(result.segments)
-                val hasLowConfidence = scoredSegments.any { scorer.isLowConfidence(it) }
-
-                // Build results bundle
-                val results = Bundle().apply {
-                    putStringArrayList(
-                        SpeechRecognizer.RESULTS_RECOGNITION,
-                        arrayListOf(result.text),
-                    )
-                    putFloatArray(
-                        SpeechRecognizer.CONFIDENCE_SCORES,
-                        floatArrayOf(scoredSegments.firstOrNull()?.confidence ?: 0.8f),
-                    )
+                val transcript = withContext(Dispatchers.IO) {
+                    if (engine.isOnnxModelAvailable()) {
+                        listener?.beginningOfSpeech()
+                        val rawPcm = captureManager.captureSeconds(8)
+                        val speechPcm = vad.trimSilence(rawPcm)
+                        engine.transcribe(speechPcm).text
+                    } else {
+                        listener?.beginningOfSpeech()
+                        AndroidSpeechRecognizerFallback.recognize(applicationContext)
+                    }
                 }
 
-                if (hasLowConfidence) {
-                    // Emit partial result — RN overlay or native overlay shows clarification
-                    listener?.partialResults(results)
-                    Log.d(TAG, "Low confidence segment — emitting partial result")
+                if (transcript.isBlank()) {
+                    listener?.error(SpeechRecognizer.ERROR_NO_MATCH)
+                    return@launch
+                }
+
+                Log.i(TAG, "Transcript: '$transcript'")
+
+                val phrasebookMatch = phrasebookMatcher.match(transcript)
+                val parsedIntent = if (phrasebookMatch.matched && phrasebookMatch.intent != null) {
+                    phrasebookMatch.intent!!
                 } else {
-                    listener?.results(results)
+                    intentParser.parse(transcript)
                 }
 
+                Log.i(TAG, "Parsed intent: ${parsedIntent.action} entities=${parsedIntent.entities}")
+
+                when (parsedIntent.action) {
+                    ActionType.DICTATE_TEXT -> {
+                        val text = parsedIntent.entities["text"] ?: transcript
+                        val results = Bundle().apply {
+                            putStringArrayList(
+                                SpeechRecognizer.RESULTS_RECOGNITION,
+                                arrayListOf(text),
+                            )
+                            putFloatArray(
+                                SpeechRecognizer.CONFIDENCE_SCORES,
+                                floatArrayOf(0.85f),
+                            )
+                        }
+                        listener?.results(results)
+                    }
+                    else -> {
+                        val actionResult = withContext(Dispatchers.IO) {
+                            actionExecutor.execute(parsedIntent)
+                        }
+                        val results = Bundle().apply {
+                            putStringArrayList(
+                                SpeechRecognizer.RESULTS_RECOGNITION,
+                                arrayListOf(actionResult.message),
+                            )
+                            putFloatArray(
+                                SpeechRecognizer.CONFIDENCE_SCORES,
+                                floatArrayOf(parsedIntent.confidence),
+                            )
+                        }
+                        listener?.results(results)
+                    }
+                }
             } catch (e: Exception) {
-                Log.e(TAG, "Transcription error: ${e.message}", e)
+                Log.e(TAG, "Recognition error: ${e.message}", e)
                 listener?.error(SpeechRecognizer.ERROR_SERVER)
             }
         }

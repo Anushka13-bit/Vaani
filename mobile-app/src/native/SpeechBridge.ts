@@ -1,9 +1,5 @@
 /**
  * VaaniMitra — SpeechBridge (§2.2)
- * Typed RN-side wrapper around the native SpeechModule + RecognitionEventEmitter.
- *
- * Native side: android/.../bridge/SpeechModule.kt
- *              android/.../bridge/RecognitionEventEmitter.kt
  */
 import { NativeModules, NativeEventEmitter, EmitterSubscription } from 'react-native';
 import type { AdapterHandle, TranscriptSegment, TranscriptionResult } from './types';
@@ -22,38 +18,56 @@ const recognitionEvents = RecognitionEventEmitterModule
   : null;
 
 export const SpeechBridge = {
-  /**
-   * Load a per-user LoRA adapter into the native inference engine.
-   * Resolves with an AdapterHandle on success.
-   */
   loadUserAdapter: (userId: string): Promise<AdapterHandle> =>
     SpeechModule.loadUserAdapter(userId),
 
-  /**
-   * Load a language/cluster adapter by BCP-47 language code.
-   */
   loadLanguageAdapter: (languageCode: string): Promise<AdapterHandle> =>
     SpeechModule.loadLanguageAdapter(languageCode),
 
-  /**
-   * Transcribe a local audio file. Used for calibration review / before-after demos.
-   * Live streaming dictation goes through PersonalizedRecognitionService (not this method).
-   */
+  downloadAndLoadClusterAdapter: (
+    downloadUrl: string,
+    authToken: string,
+    languageCode: string,
+    serverAdapterId: string,
+    version: number,
+  ): Promise<AdapterHandle> =>
+    SpeechModule.downloadAndLoadClusterAdapter(
+      downloadUrl,
+      authToken,
+      languageCode,
+      serverAdapterId,
+      version,
+    ),
+
+  downloadAndLoadUserAdapter: (
+    downloadUrl: string,
+    authToken: string,
+    userId: string,
+    version: number,
+  ): Promise<AdapterHandle> =>
+    SpeechModule.downloadAndLoadUserAdapter(downloadUrl, authToken, userId, version),
+
+  restorePersistedAdapters: (): Promise<AdapterHandle[]> =>
+    SpeechModule.restorePersistedAdapters(),
+
   transcribeFile: (audioFilePath: string): Promise<TranscriptionResult> =>
     SpeechModule.transcribeFile(audioFilePath),
 
-  /**
-   * Returns metadata about all currently stacked (active) adapters.
-   */
   getCurrentAdapterInfo: (): Promise<AdapterHandle[]> =>
     SpeechModule.getCurrentAdapterInfo(),
 
-  /**
-   * Subscribe to live transcript segments streamed from PersonalizedRecognitionService.
-   * Each segment includes text, confidence, and start timestamp.
-   *
-   * @returns EmitterSubscription — call .remove() to unsubscribe.
-   */
+  syncPhrasebookEntry: (entryJson: string): Promise<boolean> =>
+    SpeechModule.syncPhrasebookEntry(entryJson),
+
+  syncPhrasebookBulk: (entriesJson: string): Promise<boolean> =>
+    SpeechModule.syncPhrasebookBulk(entriesJson),
+
+  removePhrasebookEntry: (triggerPhrase: string): Promise<boolean> =>
+    SpeechModule.removePhrasebookEntry(triggerPhrase),
+
+  openVoiceInputSettings: (): Promise<boolean> =>
+    SpeechModule.openVoiceInputSettings(),
+
   onTranscriptSegment: (
     callback: (segment: TranscriptSegment) => void,
   ): EmitterSubscription | null => {
@@ -64,9 +78,6 @@ export const SpeechBridge = {
     return recognitionEvents.addListener('onTranscriptSegment', callback);
   },
 
-  /**
-   * Subscribe to action confirmation requests from the native layer.
-   */
   onConfirmationRequired: (
     callback: (payload: { text: string; intentJson: string }) => void,
   ): EmitterSubscription | null => {

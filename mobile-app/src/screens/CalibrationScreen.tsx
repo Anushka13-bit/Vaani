@@ -1,11 +1,5 @@
 /**
  * VaaniMitra — CalibrationScreen (§3.1)
- * Full calibration flow:
- *   1. Fetch prompts from backend
- *   2. Record audio for each prompt
- *   3. Upload samples
- *   4. Trigger training (gracefully handles 501 stub — falls back to cluster adapter)
- *   5. Download + load adapter via SpeechBridge
  */
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -19,9 +13,12 @@ import {
 } from 'react-native';
 import AudioRecorderPlayer from 'react-native-audio-recorder-player';
 import { backendClient } from '../api/trainingBackendClient';
-import { SpeechBridge } from '../native/SpeechBridge';
 import { useStore } from '../state/store';
 import type { Prompt } from '../api/dto';
+import {
+  downloadAndLoadClusterAdapter,
+  downloadAndLoadUserAdapter,
+} from '../services/adapterService';
 
 const recorder = new AudioRecorderPlayer();
 
@@ -40,8 +37,6 @@ export default function CalibrationScreen({ navigation }: any) {
   >('loading');
   const [errorMsg, setErrorMsg] = useState('');
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // ── 1. Load prompts ──────────────────────────────────────────────────────────
 
   const loadCalibrationData = useCallback(async () => {
     try {
@@ -73,8 +68,6 @@ export default function CalibrationScreen({ navigation }: any) {
     loadCalibrationData();
   }, [loadCalibrationData]);
 
-  // ── 2. Record ────────────────────────────────────────────────────────────────
-
   const startRecording = useCallback(async () => {
     try {
       setIsRecording(true);
@@ -85,20 +78,6 @@ export default function CalibrationScreen({ navigation }: any) {
       setIsRecording(false);
     }
   }, []);
-
-  const stopRecording = useCallback(async () => {
-    try {
-      await recorder.stopRecorder();
-      setIsRecording(false);
-      setPhase('uploading');
-      await uploadCurrentSample();
-    } catch (e: any) {
-      Alert.alert('Stop recording error', e?.message ?? 'Unknown error');
-      setIsRecording(false);
-    }
-  }, [lastRecordingUri, sessionId, currentIndex, prompts]);
-
-  // ── 3. Upload sample ─────────────────────────────────────────────────────────
 
   const uploadCurrentSample = useCallback(async () => {
     if (!sessionId || !lastRecordingUri) return;
@@ -124,16 +103,55 @@ export default function CalibrationScreen({ navigation }: any) {
     }
   }, [sessionId, lastRecordingUri, currentIndex, prompts]);
 
-  // ── 4. Trigger training (gracefully handles 501 stub) ────────────────────────
+  const stopRecording = useCallback(async () => {
+    try {
+      await recorder.stopRecorder();
+      setIsRecording(false);
+      setPhase('uploading');
+      await uploadCurrentSample();
+    } catch (e: any) {
+      Alert.alert('Stop recording error', e?.message ?? 'Unknown error');
+      setIsRecording(false);
+    }
+  }, [uploadCurrentSample]);
+
+  const loadClusterAdapter = useCallback(async () => {
+    const handle = await downloadAndLoadClusterAdapter(
+      preferredLanguage,
+      dysarthriaSeverityHint ?? undefined,
+    );
+    setActiveAdapters([handle]);
+    setPhase('done');
+  }, [preferredLanguage, dysarthriaSeverityHint, setActiveAdapters]);
+
+  const loadUserAdapter = useCallback(async (uid: string, adapterId: string, version: number) => {
+    try {
+      const handle = await downloadAndLoadUserAdapter(uid, adapterId, version);
+      setActiveAdapters([handle]);
+      setPhase('done');
+    } catch (e: any) {
+      console.warn('[CalibrationScreen] User adapter load failed, falling back to cluster:', e?.message);
+      await loadClusterAdapter();
+    }
+  }, [loadClusterAdapter, setActiveAdapters]);
 
   const triggerAndPollTraining = useCallback(async () => {
-    if (!sessionId || !userId) return;
+    if (!sessionId || !userId) {
+      setErrorMsg('Session not ready. Please retry calibration.');
+      setPhase('error');
+      return;
+    }
+
     try {
       await backendClient.calibration.triggerTraining(sessionId);
     } catch (e: any) {
-      // 501 = live training disabled — fall through to cluster adapter
       if (e?.response?.status === 501) {
-        await loadClusterAdapter();
+        try {
+          await loadClusterAdapter();
+        } catch (clusterErr: any) {
+          setErrorMsg(clusterErr?.message ?? 'Failed to download voice model');
+          setPhase('error');
+        }
         return;
       }
       setErrorMsg(e?.message ?? 'Training trigger failed');
@@ -141,48 +159,28 @@ export default function CalibrationScreen({ navigation }: any) {
       return;
     }
 
-    // Poll for completion
     pollRef.current = setInterval(async () => {
       try {
         const status = await backendClient.calibration.getStatus(sessionId);
         if (status.status === 'COMPLETE' && status.resulting_adapter_id) {
           clearInterval(pollRef.current!);
-          await loadUserAdapter(userId);
+          await loadUserAdapter(userId, status.resulting_adapter_id, 1);
         } else if (status.status === 'FAILED') {
           clearInterval(pollRef.current!);
-          await loadClusterAdapter(); // fallback
+          try {
+            await loadClusterAdapter();
+          } catch (clusterErr: any) {
+            setErrorMsg(clusterErr?.message ?? 'Failed to load fallback voice model');
+            setPhase('error');
+          }
         }
-      } catch (_) {}
+      } catch (pollErr: any) {
+        console.warn('[CalibrationScreen] Poll error:', pollErr?.message);
+      }
     }, 3000);
-  }, [sessionId, userId]);
-
-  // ── 5. Load adapter ──────────────────────────────────────────────────────────
-
-  const loadUserAdapter = async (uid: string) => {
-    try {
-      const handle = await SpeechBridge.loadUserAdapter(uid);
-      setActiveAdapters([handle]);
-      setPhase('done');
-    } catch (_) {
-      await loadClusterAdapter();
-    }
-  };
-
-  const loadClusterAdapter = async () => {
-    try {
-      const cluster = await backendClient.adapters.getClusterAdapter(
-        preferredLanguage,
-        dysarthriaSeverityHint ?? undefined,
-      );
-      const handle = await SpeechBridge.loadLanguageAdapter(cluster.adapter_id);
-      setActiveAdapters([handle]);
-    } catch (_) {}
-    setPhase('done');
-  };
+  }, [sessionId, userId, loadClusterAdapter, loadUserAdapter]);
 
   useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
-
-  // ── Render ────────────────────────────────────────────────────────────────────
 
   if (phase === 'loading') {
     return (
@@ -208,8 +206,8 @@ export default function CalibrationScreen({ navigation }: any) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color="#6C63FF" />
-        <Text style={styles.subtitle}>Personalising your voice model…</Text>
-        <Text style={styles.hint}>This may take a few minutes.</Text>
+        <Text style={styles.subtitle}>Downloading your voice model…</Text>
+        <Text style={styles.hint}>Applying cluster adapter for {preferredLanguage.toUpperCase()}.</Text>
       </View>
     );
   }
@@ -218,9 +216,12 @@ export default function CalibrationScreen({ navigation }: any) {
     return (
       <View style={styles.center}>
         <Text style={styles.doneText}>✅ Calibration complete!</Text>
-        <Text style={styles.subtitle}>Your personalised voice model is ready.</Text>
+        <Text style={styles.subtitle}>Your voice model is loaded and ready.</Text>
+        <Text style={styles.hint}>
+          Go to Settings → Voice Activation to use VaaniMitra in any app.
+        </Text>
         <TouchableOpacity style={styles.btn} onPress={() => navigation.navigate('Settings')}>
-          <Text style={styles.btnText}>Continue</Text>
+          <Text style={styles.btnText}>Continue to Settings</Text>
         </TouchableOpacity>
       </View>
     );
@@ -269,7 +270,7 @@ const styles = StyleSheet.create({
     shadowColor: '#6C63FF', shadowOpacity: 0.3, shadowRadius: 12,
   },
   promptText: { fontSize: 22, color: '#E8E8FF', textAlign: 'center', lineHeight: 32 },
-  hint: { fontSize: 13, color: '#888', textAlign: 'center', marginBottom: 32 },
+  hint: { fontSize: 13, color: '#888', textAlign: 'center', marginBottom: 32, paddingHorizontal: 12 },
   btn: {
     backgroundColor: '#6C63FF', borderRadius: 12,
     paddingVertical: 16, paddingHorizontal: 40, marginTop: 8,

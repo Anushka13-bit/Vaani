@@ -1,6 +1,5 @@
 /**
  * VaaniMitra — PhrasebookScreen (§2.1, §3.3)
- * CRUD UI for user shortcut phrases — wired to localDb + native phrasebook mirror.
  */
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -9,21 +8,68 @@ import {
 } from 'react-native';
 import { LocalDb } from '../storage/localDb';
 import { useStore } from '../state/store';
-import type { PhrasebookEntry } from '../native/types';
-import { NativeModules } from 'react-native';
+import type { ActionType, PhrasebookEntry } from '../native/types';
+import { SpeechBridge } from '../native/SpeechBridge';
 
-const { SpeechModule } = NativeModules;
+function inferActionFromTrigger(trigger: string, actionText: string): {
+  actionType: ActionType;
+  payload: Record<string, string>;
+} {
+  const trimmed = trigger.trim();
+  const lower = trimmed.toLowerCase();
 
-function newEntry(userId: string, trigger: string, action: string): PhrasebookEntry {
+  const callMatch = lower.match(/^call\s+(.+)$/i);
+  if (callMatch) {
+    return {
+      actionType: 'PLACE_CALL',
+      payload: { contact: callMatch[1].trim() },
+    };
+  }
+
+  const smsMatch = lower.match(/^text\s+(.+)$/i) || lower.match(/^message\s+(.+)$/i);
+  if (smsMatch) {
+    return {
+      actionType: 'SEND_MESSAGE',
+      payload: { contact: smsMatch[1].trim(), body: actionText || '' },
+    };
+  }
+
+  if (lower.startsWith('search ')) {
+    return {
+      actionType: 'WEB_SEARCH',
+      payload: { query: trimmed.substring(7).trim() },
+    };
+  }
+
+  if (lower.startsWith('open ')) {
+    return {
+      actionType: 'OPEN_APP',
+      payload: { app: trimmed.substring(5).trim() },
+    };
+  }
+
   return {
-    id: `phrase_${Date.now()}`,
-    userId,
-    triggerPhrase: trigger,
     actionType: 'DICTATE_TEXT',
-    actionPayloadJson: JSON.stringify({ text: action }),
-    createdAt: Date.now(),
-    lastUsedAt: null,
-    useCount: 0,
+    payload: { text: actionText || trimmed },
+  };
+}
+
+function buildEntry(
+  userId: string,
+  trigger: string,
+  actionText: string,
+  existing?: PhrasebookEntry,
+): PhrasebookEntry {
+  const { actionType, payload } = inferActionFromTrigger(trigger, actionText);
+  return {
+    id: existing?.id ?? `phrase_${Date.now()}`,
+    userId,
+    triggerPhrase: trigger.trim(),
+    actionType,
+    actionPayloadJson: JSON.stringify(payload),
+    createdAt: existing?.createdAt ?? Date.now(),
+    lastUsedAt: existing?.lastUsedAt ?? null,
+    useCount: existing?.useCount ?? 0,
   };
 }
 
@@ -38,6 +84,7 @@ export default function PhrasebookScreen() {
     (async () => {
       const loaded = await LocalDb.loadPhrasebook();
       setEntries(loaded);
+      await SpeechBridge.syncPhrasebookBulk(JSON.stringify(loaded));
     })();
   }, []);
 
@@ -51,16 +98,19 @@ export default function PhrasebookScreen() {
   const openEdit = (entry: PhrasebookEntry) => {
     setEditingEntry(entry);
     setTrigger(entry.triggerPhrase);
-    try { setAction(JSON.parse(entry.actionPayloadJson)?.text ?? ''); } catch { setAction(''); }
+    try {
+      const payload = JSON.parse(entry.actionPayloadJson);
+      setAction(payload.text ?? payload.body ?? '');
+    } catch {
+      setAction('');
+    }
     setModalVisible(true);
   };
 
   const save = useCallback(async () => {
     if (!trigger.trim()) return;
     const uid = userId ?? 'local';
-    const entry = editingEntry
-      ? { ...editingEntry, triggerPhrase: trigger, actionPayloadJson: JSON.stringify({ text: action }) }
-      : newEntry(uid, trigger, action);
+    const entry = buildEntry(uid, trigger, action, editingEntry ?? undefined);
 
     if (editingEntry) {
       updateEntry(entry);
@@ -74,15 +124,12 @@ export default function PhrasebookScreen() {
       : [...allEntries, entry];
     await LocalDb.savePhrasebook(updated);
 
-    // Push to native phrasebook mirror for fast matching without bridge round-trips
     try {
-      if (SpeechModule?.syncPhrasebookEntry) {
-        await SpeechModule.syncPhrasebookEntry(JSON.stringify(entry));
-      }
-    } catch (_) { /* native mirror is best-effort */ }
+      await SpeechBridge.syncPhrasebookEntry(JSON.stringify(entry));
+    } catch (_) {}
 
     setModalVisible(false);
-  }, [trigger, action, editingEntry, userId]);
+  }, [trigger, action, editingEntry, userId, addEntry, updateEntry]);
 
   const confirmDelete = (entry: PhrasebookEntry) => {
     Alert.alert('Delete phrase', `Remove "${entry.triggerPhrase}"?`, [
@@ -91,15 +138,33 @@ export default function PhrasebookScreen() {
         text: 'Delete', style: 'destructive', onPress: async () => {
           removeEntry(entry.id);
           await LocalDb.deletePhrasebookEntry(entry.id);
+          try {
+            await SpeechBridge.removePhrasebookEntry(entry.triggerPhrase);
+          } catch (_) {}
         },
       },
     ]);
   };
 
+  const actionLabel = (entry: PhrasebookEntry): string => {
+    try {
+      const payload = JSON.parse(entry.actionPayloadJson);
+      if (entry.actionType === 'PLACE_CALL') return `Call ${payload.contact}`;
+      if (entry.actionType === 'SEND_MESSAGE') return `Message ${payload.contact}`;
+      if (entry.actionType === 'WEB_SEARCH') return `Search: ${payload.query}`;
+      if (entry.actionType === 'OPEN_APP') return `Open ${payload.app}`;
+      return payload.text ?? entry.actionType;
+    } catch {
+      return entry.actionType;
+    }
+  };
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Phrasebook</Text>
-      <Text style={styles.subtitle}>Add shortcut phrases for quick actions</Text>
+      <Text style={styles.subtitle}>
+        Shortcuts like &quot;call Ravi&quot; work when you use the system mic in any app.
+      </Text>
 
       <FlatList
         data={entries}
@@ -111,8 +176,8 @@ export default function PhrasebookScreen() {
         renderItem={({ item }) => (
           <View style={styles.card}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.phraseText}>"{item.triggerPhrase}"</Text>
-              <Text style={styles.actionText}>{item.actionType}</Text>
+              <Text style={styles.phraseText}>&quot;{item.triggerPhrase}&quot;</Text>
+              <Text style={styles.actionText}>{actionLabel(item)}</Text>
             </View>
             <TouchableOpacity onPress={() => openEdit(item)} style={styles.editBtn}>
               <Text style={styles.editBtnText}>Edit</Text>
@@ -140,12 +205,12 @@ export default function PhrasebookScreen() {
               placeholder="e.g. call Ravi"
               placeholderTextColor="#555"
             />
-            <Text style={styles.label}>Action / response text</Text>
+            <Text style={styles.label}>Optional note / message body</Text>
             <TextInput
               style={styles.input}
               value={action}
               onChangeText={setAction}
-              placeholder="e.g. Calling Ravi now…"
+              placeholder="e.g. Running late"
               placeholderTextColor="#555"
             />
             <View style={styles.modalActions}>
@@ -166,7 +231,7 @@ export default function PhrasebookScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#0F0F1A', padding: 20 },
   title: { fontSize: 24, fontWeight: '700', color: '#E8E8FF', marginBottom: 4 },
-  subtitle: { fontSize: 13, color: '#888', marginBottom: 20 },
+  subtitle: { fontSize: 13, color: '#888', marginBottom: 20, lineHeight: 18 },
   list: { paddingBottom: 100 },
   empty: { color: '#555', textAlign: 'center', marginTop: 60, fontSize: 15 },
   card: {
