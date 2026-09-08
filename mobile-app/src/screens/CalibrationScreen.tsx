@@ -43,27 +43,35 @@ export default function CalibrationScreen({ navigation }: any) {
 
   // ── 1. Load prompts ──────────────────────────────────────────────────────────
 
-  useEffect(() => {
-    (async () => {
-      try {
-        const resp = await backendClient.calibration.getPrompts(preferredLanguage, 40);
-        setPrompts(resp.prompts);
-        setPromptSetId(resp.prompt_set_id);
-        setPhase('prompts');
+  const loadCalibrationData = useCallback(async () => {
+    try {
+      setPhase('loading');
+      setErrorMsg('');
+      const resp = await backendClient.calibration.getPrompts(preferredLanguage, 40);
+      setPrompts(resp.prompts);
+      setPromptSetId(resp.prompt_set_id);
 
-        // Create session
-        if (!userId) return;
-        const session = await backendClient.calibration.createSession({
-          user_id: userId,
-          prompt_set_id: resp.prompt_set_id,
-        });
-        setSessionId(session.session_id);
-      } catch (e: any) {
-        setErrorMsg(e?.message ?? 'Failed to load prompts');
-        setPhase('error');
+      if (userId) {
+        try {
+          const session = await backendClient.calibration.createSession({
+            user_id: userId,
+            prompt_set_id: resp.prompt_set_id,
+          });
+          setSessionId(session.session_id);
+        } catch (sessionErr: any) {
+          console.warn('[CalibrationScreen] Session init:', sessionErr?.message);
+        }
       }
-    })();
-  }, []);
+      setPhase('prompts');
+    } catch (e: any) {
+      setErrorMsg(e?.message ?? 'Failed to load prompts');
+      setPhase('error');
+    }
+  }, [userId, preferredLanguage]);
+
+  useEffect(() => {
+    loadCalibrationData();
+  }, [loadCalibrationData]);
 
   // ── 2. Record ────────────────────────────────────────────────────────────────
 
@@ -189,7 +197,7 @@ export default function CalibrationScreen({ navigation }: any) {
     return (
       <View style={styles.center}>
         <Text style={styles.errorText}>⚠️ {errorMsg}</Text>
-        <TouchableOpacity style={styles.btn} onPress={() => setPhase('loading')}>
+        <TouchableOpacity style={styles.btn} onPress={loadCalibrationData}>
           <Text style={styles.btnText}>Retry</Text>
         </TouchableOpacity>
       </View>

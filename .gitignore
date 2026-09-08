@@ -6,6 +6,8 @@ training-backend/ml/adapters/**/adapter_model.bin
 training-backend/ml/adapters/**/adapter_model.safetensors
 training-backend/ml/adapters/**/*.bin
 training-backend/ml/adapters/**/*.safetensors
+*.bin
+*.safetensors
 
 # ── Runtime / generated ───────────────────────────────────────────────────────
 training-backend/vaanimitra.db

@@ -1,3 +1,4 @@
 <resources>
     <string name="app_name">VaaniMitra</string>
+    <string name="accessibility_service_description">VaaniMitra Accessibility Service assists users with speech disabilities by automating device actions and filling text inputs.</string>
 </resources>

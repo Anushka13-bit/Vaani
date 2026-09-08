@@ -155,11 +155,11 @@ async def download_adapter(
                 f"Drop adapter_model.bin into ml/adapters/{adapter_id}/ and restart the server."
             ),
         )
-
+    filename = f"{adapter_id}{file_path.suffix}" if file_path.suffix else f"{adapter_id}.bin"
     return FileResponse(
         path=str(file_path),
         media_type="application/octet-stream",
-        filename=f"{adapter_id}.bin",
+        filename=filename,
     )
 
 

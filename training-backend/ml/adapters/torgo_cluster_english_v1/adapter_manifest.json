@@ -6,5 +6,5 @@
   "base_model": "openai/whisper-small",
   "parent_adapter_id": null,
   "version": 1,
-  "weights_file": "adapter_model.bin"
+  "weights_file": "adapter_model.safetensors"
 }

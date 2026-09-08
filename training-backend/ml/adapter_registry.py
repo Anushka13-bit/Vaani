@@ -112,10 +112,17 @@ async def _register_from_manifest(
                     adapter_id, manifest["type"], manifest["language_code"],
                     "present" if weights_present else "MISSING — placeholder registered")
     else:
-        # Update checksum and path if weights just appeared
+        updated = False
         if checksum and existing.checksum != checksum:
             existing.checksum = checksum
+            updated = True
+        if weights_present and existing.storage_path != str(weights_path):
             existing.storage_path = str(weights_path)
-            logger.info("Updated adapter weights for: %s", adapter_id)
+            updated = True
+        if manifest.get("base_model") and existing.base_model != manifest["base_model"]:
+            existing.base_model = manifest["base_model"]
+            updated = True
+        if updated:
+            logger.info("Updated adapter weights & metadata for: %s", adapter_id)
         else:
             logger.debug("Adapter already registered (no changes): %s", adapter_id)

@@ -101,10 +101,12 @@ async def create_session(
         )
         .limit(1)
     )
-    if result.scalar_one_or_none():
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="A calibration session is already in progress for this user.",
+    existing_session = result.scalar_one_or_none()
+    if existing_session:
+        return CreateSessionResponse(
+            session_id=existing_session.session_id,
+            status=existing_session.status,
+            samples_required=existing_session.samples_required,
         )
 
     session = CalibrationSessionRecord(
