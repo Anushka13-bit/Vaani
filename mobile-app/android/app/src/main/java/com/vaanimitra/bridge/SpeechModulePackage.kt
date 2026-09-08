@@ -15,6 +15,7 @@ class SpeechModulePackage : ReactPackage {
         listOf(
             SpeechModule(reactContext),
             RecognitionEventEmitter(reactContext),
+            AccessibilityModule(reactContext),
         )
 
     override fun createViewManagers(reactContext: ReactApplicationContext): List<ViewManager<*, *>> =
