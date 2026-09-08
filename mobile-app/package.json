@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "android": "react-native run-android",
+    "android": "ANDROID_HOME=${ANDROID_HOME:-$HOME/Library/Android/sdk} PATH=$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$PATH react-native run-android",
     "ios": "react-native run-ios",
     "start": "react-native start",
     "lint": "eslint . --ext .ts,.tsx"

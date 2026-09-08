@@ -20,8 +20,8 @@ data class AdapterHandle(
 )
 
 interface AdapterManagerInterface {
-    suspend fun loadUserAdapter(userId: String): AdapterHandle
-    suspend fun loadLanguageAdapter(languageCode: String, serverAdapterId: String? = null): AdapterHandle
+    fun loadUserAdapter(userId: String): AdapterHandle
+    fun loadLanguageAdapter(languageCode: String, serverAdapterId: String? = null): AdapterHandle
     fun currentStackedAdapters(): List<AdapterHandle>
 }
 
@@ -47,7 +47,7 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
 
     private val stackedAdapters = mutableListOf<AdapterHandle>()
 
-    override suspend fun loadUserAdapter(userId: String): AdapterHandle {
+    override fun loadUserAdapter(userId: String): AdapterHandle {
         val file = File(adaptersDir, "user_${userId}.bin")
         if (!file.exists()) {
             Log.w(TAG, "USER adapter not found for userId=$userId. Download first.")
@@ -67,9 +67,9 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
         return handle
     }
 
-    override suspend fun loadLanguageAdapter(
+    override fun loadLanguageAdapter(
         languageCode: String,
-        serverAdapterId: String? = null,
+        serverAdapterId: String?,
     ): AdapterHandle {
         val file = File(adaptersDir, languageFileName(languageCode))
         if (!file.exists()) {
@@ -103,6 +103,9 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
         Log.i(TAG, "Loaded ${type.name} adapter: ${handle.adapterId} (lang=$languageCode)")
         return handle
     }
+
+    fun loadLanguageAdapter(languageCode: String): AdapterHandle =
+        loadLanguageAdapter(languageCode, null)
 
     fun saveLanguageAdapterBytes(languageCode: String, bytes: ByteArray): File {
         val file = File(adaptersDir, languageFileName(languageCode))
