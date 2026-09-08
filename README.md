@@ -333,8 +333,6 @@ flowchart TB
 │   │   └── adapters/                    # seed adapters (e.g. torgo_cluster_english_v1/)
 │   └── requirements.txt
 │
-├── caregiver-dashboard/                 # (optional) React app
-│
 ├── notebooks/
 │   └── torgo_whisper_lora_colab.ipynb   # standalone Colab training notebook
 │

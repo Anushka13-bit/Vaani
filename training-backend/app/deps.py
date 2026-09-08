@@ -26,19 +26,21 @@ async def get_db() -> AsyncGenerator[AsyncSession, None]:
             raise
 
 
+from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+
+security = HTTPBearer(auto_error=True)
+
+
 # ── Auth ─────────────────────────────────────────────────────────────────────
-# Simple bearer token check — tokens are stored (hashed) per user.
+# Standard HTTP Bearer token check — integrates with OpenAPI /docs Authorize button.
 # For hackathon scope: token == user_id (opaque, issued at /v1/auth/device).
 # Replace with JWT validation when moving beyond hackathon.
 
 async def get_current_user(
-    authorization: str = Header(..., description="Bearer <token>"),
+    credentials: HTTPAuthorizationCredentials = Depends(security),
     db: AsyncSession = Depends(get_db),
 ) -> UserRecord:
-    if not authorization.startswith("Bearer "):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid auth header")
-
-    token = authorization.removeprefix("Bearer ").strip()
+    token = credentials.credentials.strip()
 
     result = await db.execute(
         select(UserRecord).where(UserRecord.access_token_hash == token)
