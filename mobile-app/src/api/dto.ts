@@ -55,6 +55,18 @@ export interface SessionStatusResponse {
   resulting_adapter_id: string | null;
 }
 
+export type SessionAdapterPhase = 'queued' | 'training' | 'exporting' | 'ready' | 'failed';
+
+export interface SessionAdapterStatusResponse {
+  session_id: string;
+  status: SessionAdapterPhase;
+  progress_pct: number;
+  adapter_id: string | null;
+  job_id: string | null;
+  message: string | null;
+  error: string | null;
+}
+
 // ── Adapters ──────────────────────────────────────────────────────────────────
 
 export interface AdapterMetaResponse {

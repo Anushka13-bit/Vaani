@@ -6,15 +6,6 @@ import { SpeechBridge } from '../native/SpeechBridge';
 import { LocalDb } from '../storage/localDb';
 import type { AdapterHandle } from '../native/types';
 
-const API_BASE = __DEV__
-  ? 'http://10.0.2.2:8000'
-  : 'https://your-production-server.example.com';
-
-function resolveDownloadUrl(url: string): string {
-  if (url.startsWith('http://') || url.startsWith('https://')) return url;
-  return `${API_BASE}${url.startsWith('/') ? '' : '/'}${url}`;
-}
-
 function getAuthToken(): string {
   const token = backendClient.getToken();
   if (!token) throw new Error('Not authenticated — cannot download adapter');
@@ -26,27 +17,34 @@ export async function downloadAndLoadClusterAdapter(
   severity?: string,
 ): Promise<AdapterHandle> {
   const cluster = await backendClient.adapters.getClusterAdapter(language, severity);
-  const handle = await SpeechBridge.downloadAndLoadClusterAdapter(
-    resolveDownloadUrl(backendClient.adapters.getMobileBundleUrl(cluster.adapter_id)),
+  const handle = await SpeechBridge.downloadAndLoadMobileBundle(
+    backendClient.adapters.getMobileBundleUrl(cluster.adapter_id),
     getAuthToken(),
-    language,
     cluster.adapter_id,
     cluster.version,
+    'CLUSTER',
   );
   await LocalDb.saveActiveAdapters([handle]);
   return handle;
 }
 
+/** Download per-user ONNX mobile bundle produced by local fine-tune. */
 export async function downloadAndLoadUserAdapter(
   userId: string,
   adapterId: string,
   version: number,
+  sessionId?: string,
 ): Promise<AdapterHandle> {
-  const handle = await SpeechBridge.downloadAndLoadUserAdapter(
-    resolveDownloadUrl(backendClient.adapters.getDownloadUrl(adapterId)),
+  const downloadUrl = sessionId
+    ? backendClient.calibration.getSessionAdapterDownloadUrl(sessionId)
+    : backendClient.adapters.getMobileBundleUrl(adapterId);
+
+  const handle = await SpeechBridge.downloadAndLoadMobileBundle(
+    downloadUrl,
     getAuthToken(),
-    userId,
+    adapterId,
     version,
+    'USER',
   );
   const existing = await LocalDb.loadActiveAdapters();
   const merged = [

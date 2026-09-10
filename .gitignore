@@ -20,6 +20,7 @@ training-backend/.env.local
 training-backend/.venv-export/
 training-backend/venv/
 training-backend/ml/mobile_export/
+training-backend/sessions/
 
 # ── Node / React Native ───────────────────────────────────────────────────────
 mobile-app/node_modules/
@@ -39,6 +40,8 @@ mobile-app/android/app/src/main/assets/*.onnx
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
 **/.DS_Store
+**/* 2.*
+**/* 2/
 
 # ── IDEs ──────────────────────────────────────────────────────────────────────
 .idea/

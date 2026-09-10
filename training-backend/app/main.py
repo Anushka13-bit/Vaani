@@ -17,7 +17,7 @@ from app.config import settings
 from app.db.init_db import init_db
 from app.ml_registry_shim import run_adapter_registry
 from app.models.pydantic_models import ErrorDetail, ErrorResponse
-from app.routers import auth, calibration, adapters, corrections, caregiver
+from app.routers import auth, calibration, adapters, corrections, caregiver, calibrate, session_adapter
 
 logging.basicConfig(
     level=logging.DEBUG if settings.DEBUG else logging.INFO,
@@ -53,8 +53,8 @@ app = FastAPI(
     description=(
         "Training backend for VaaniMitra — personalized dysarthric speech assistant. "
         "Manages calibration sessions, LoRA adapter storage/versioning, corrections, "
-        "and caregiver endpoints. Live training pipeline is stubbed; "
-        "drop pre-trained adapter weights into ml/adapters/ to activate."
+        "and caregiver endpoints. Local fine-tune + ONNX export when "
+        "LIVE_TRAINING_ENABLED=true."
     ),
     docs_url="/docs",
     redoc_url="/redoc",
@@ -89,6 +89,8 @@ PREFIX = f"/{settings.API_VERSION}"
 
 app.include_router(auth.router, prefix=PREFIX)
 app.include_router(calibration.router, prefix=PREFIX)
+app.include_router(calibrate.router, prefix=PREFIX)
+app.include_router(session_adapter.router, prefix=PREFIX)
 app.include_router(adapters.router, prefix=PREFIX)
 app.include_router(corrections.router, prefix=PREFIX)
 app.include_router(caregiver.router, prefix=PREFIX)

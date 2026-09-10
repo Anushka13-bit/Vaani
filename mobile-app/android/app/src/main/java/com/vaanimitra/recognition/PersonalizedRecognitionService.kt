@@ -37,7 +37,10 @@ class PersonalizedRecognitionService : RecognitionService() {
         val adapterManager = VaaniMitraComponents.adapterManager(applicationContext)
         val engine = VaaniMitraComponents.whisperEngine(applicationContext)
         val restored = adapterManager.restorePersistedStack()
-        engine.activeAdapterPath = restored.firstOrNull()?.filePath
+        restored.firstOrNull()?.let { handle ->
+            engine.activeAdapterId = handle.adapterId
+            engine.activeAdapterPath = handle.filePath
+        }
 
         Log.i(TAG, "PersonalizedRecognitionService created — restored ${restored.size} adapter(s)")
     }
@@ -57,7 +60,10 @@ class PersonalizedRecognitionService : RecognitionService() {
                 if (adapterManager.currentStackedAdapters().isEmpty()) {
                     adapterManager.restorePersistedStack()
                 }
-                engine.activeAdapterPath = adapterManager.currentStackedAdapters().firstOrNull()?.filePath
+                adapterManager.currentStackedAdapters().firstOrNull()?.let { handle ->
+                    engine.activeAdapterId = handle.adapterId
+                    engine.activeAdapterPath = handle.filePath
+                }
 
                 val transcript = withContext(Dispatchers.IO) {
                     if (engine.isOnnxModelAvailable()) {

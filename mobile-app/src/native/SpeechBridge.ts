@@ -24,6 +24,21 @@ export const SpeechBridge = {
   loadLanguageAdapter: (languageCode: string): Promise<AdapterHandle> =>
     SpeechModule.loadLanguageAdapter(languageCode),
 
+  downloadAndLoadMobileBundle: (
+    downloadUrl: string,
+    authToken: string,
+    adapterId: string,
+    version: number,
+    adapterType: 'USER' | 'CLUSTER' | 'LANGUAGE',
+  ): Promise<AdapterHandle> =>
+    SpeechModule.downloadAndLoadMobileBundle(
+      downloadUrl,
+      authToken,
+      adapterId,
+      version,
+      adapterType,
+    ),
+
   downloadAndLoadClusterAdapter: (
     downloadUrl: string,
     authToken: string,

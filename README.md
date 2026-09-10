@@ -42,9 +42,10 @@ Mainstream voice assistants have documented failure rates on dysarthric speech. 
 - 🏠 Basic smart-home style actions
 
 ### Personalization
-- 🧠 Calibration flow: record ~40 short phrases → download a cluster-matched voice model
-- 🚀 **Cluster-adapter warm start** — users start from a severity/language-matched pretrained LoRA instead of from zero
+- 🧠 Calibration flow: record ~40 short phrases → **local fine-tune on your laptop** → download personalized ONNX bundle
+- 🚀 **Cluster-adapter warm start** — per-user LoRA fine-tunes from merged TORGO weights, not raw Whisper
 - 📦 **Merged ONNX bundle** — LoRA is baked into a single on-device Whisper ONNX package (no runtime adapter stacking)
+- 🔄 **Cluster fallback** — if training fails or times out, app auto-loads the pre-baked cluster adapter
 
 ### Differentiators
 - ✅ **Confidence-gated clarification** — low-confidence words trigger a tap-to-confirm prompt
@@ -151,27 +152,26 @@ flowchart LR
     J --> K[TTS confirmation]
 ```
 
-### Calibration / model download
+### Calibration → fine-tune → deploy (local laptop)
 
 ```mermaid
 sequenceDiagram
     participant App as Mobile App
-    participant API as FastAPI Backend
+    participant API as FastAPI (laptop)
+    participant Train as run_finetune (local GPU/CPU)
 
-    App->>API: GET /v1/calibration/prompts
-    API-->>App: ~40 phrase prompts
-    loop each phrase
-        App->>API: POST /v1/calibration/sessions/{id}/samples
-    end
+    App->>API: POST /v1/calibration/sessions/{id}/samples (×40)
     App->>API: POST /v1/calibration/sessions/{id}/train
-    Note over API: Returns 501 today — live training not enabled
-    App->>API: GET /v1/adapters/clusters?language=en&severity=...
-    App->>API: GET /v1/adapters/{id}/mobile
-    API-->>App: mobile_bundle.zip (merged ONNX)
-    App->>App: Extract, load ONNX sessions, persist adapter handle
+    API->>Train: BackgroundTask — LoRA fine-tune + ONNX export
+    loop poll every 3s
+        App->>API: GET /v1/adapter/{session_id}/status
+    end
+    App->>API: GET /v1/adapter/{session_id}
+    API-->>App: mobile_bundle.zip (personalized ONNX INT8)
+    App->>App: Extract bundle, set activeAdapterId, ONNX inference
 ```
 
-Samples are collected and stored; per-user GPU training is planned but **not live yet**. The app downloads the pre-trained cluster mobile bundle instead.
+Audio never leaves your machine. Set `API_HOST` in `mobile-app/src/config/backend.ts` and use `adb reverse tcp:8000 tcp:8000` for USB debugging.
 
 ---
 
@@ -197,10 +197,13 @@ Samples are collected and stored; per-user GPU training is planned but **not liv
 │       └── bridge/                          # SpeechModule, RecognitionEventEmitter
 │
 ├── training-backend/                        # FastAPI service
-│   ├── app/routers/                         # auth, calibration, adapters, corrections, caregiver
+│   ├── app/routers/                         # auth, calibration, calibrate, session_adapter, adapters
+│   ├── app/services/session_status.py       # Pollable status.json per session
 │   └── ml/
 │       ├── adapters/                        # LoRA weights + adapter_manifest.json
+│       ├── run_finetune.py                  # Local fine-tune + auto ONNX export
 │       ├── export_whisper_mobile.py         # LoRA → merged ONNX → mobile_bundle.zip
+│       ├── requirements-training.txt        # torch/peft/datasets for live fine-tune
 │       ├── requirements-export.txt
 │       └── MOBILE_SETUP.md                  # Detailed mobile export guide
 │
@@ -234,9 +237,10 @@ Samples are collected and stored; per-user GPU training is planned but **not liv
 
 ### Prerequisites
 
-- Python 3.10+, Node 18+ (Node 20 recommended), Android SDK
-- Physical Android device recommended (emulator: backend at `http://10.0.2.2:8000/v1`)
-- ~2 GB disk for export venv + ONNX models
+- Python 3.10+, Node 20 recommended, Android SDK
+- Physical Android device + USB cable (or emulator)
+- ~4 GB disk for training/export deps + ONNX models
+- TORGO cluster weights in `training-backend/ml/adapters/torgo_cluster_english_v1/`
 
 ### 1. Training backend
 
@@ -244,12 +248,23 @@ Samples are collected and stored; per-user GPU training is planned but **not liv
 cd training-backend
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
+pip install -r ml/requirements-training.txt   # torch, peft, datasets — for live fine-tune
 uvicorn app.main:app --reload --port 8000
 ```
 
-Optional: copy `.env` and set `SECRET_KEY`, `DATABASE_URL`, etc.
+Verify: `curl http://127.0.0.1:8000/health` → `{"status":"ok","live_training_enabled":true}`
 
-Place LoRA weights in `ml/adapters/torgo_cluster_english_v1/` (see `adapter_manifest.json`).
+Optional `.env`: `SECRET_KEY`, `LIVE_TRAINING_ENABLED=false` (cluster-only mode, no torch needed).
+
+### 1b. Connect phone to laptop backend
+
+| Setup | `mobile-app/src/config/backend.ts` | Extra step |
+|---|---|---|
+| **USB (recommended)** | `API_HOST = '127.0.0.1'` | `adb reverse tcp:8000 tcp:8000` |
+| **Android emulator** | `API_HOST = '10.0.2.2'` | none |
+| **Phone hotspot** | `API_HOST = '<laptop-LAN-IP>'` | same WiFi/hotspot network |
+
+Audio uploads go to your **local** FastAPI server — never a cloud host.
 
 ### 2. Export mobile ONNX bundle (required for on-device Whisper)
 
@@ -303,18 +318,18 @@ cd mobile-app/android && ./gradlew clean
 
 | Area | Status |
 |---|---|
-| On-device ONNX Whisper | ✅ Implemented (`OnnxWhisperRuntime`, mel preprocessing, NNAPI) |
+| On-device ONNX Whisper | ✅ `OnnxWhisperRuntime`, mel preprocessing, NNAPI → CPU |
 | Wake word (openWakeWord) | ✅ Implemented; custom `hey_lily.onnx` still to be trained |
 | System-wide dictation | ✅ `PersonalizedRecognitionService` |
-| Calibration sample upload | ✅ Works |
-| Live per-user LoRA training | ❌ `POST .../train` returns **501** (`LIVE_TRAINING_ENABLED=false`) |
-| App behavior after calibration | Downloads **cluster** mobile bundle, not a user-specific adapter |
+| Calibration sample upload | ✅ Multipart to local FastAPI |
+| Live per-user LoRA training | ✅ `run_finetune.py` — TORGO warm-start, encoder frozen, decoder LoRA r=4 |
+| Auto ONNX export after train | ✅ QUInt8 dynamic quant (same scheme as cluster bundle) |
+| Session polling + download | ✅ `GET /v1/adapter/{session_id}/status` + `/adapter/{session_id}` |
+| Cluster fallback | ✅ On training failure, timeout, or `LIVE_TRAINING_ENABLED=false` |
 | iOS | Scaffold only — Android is the target platform |
-| Caregiver PIN | Dev-only hardcoded PIN in RN screen |
-| Tamil user adapters | Aspirational; shipped demo uses English TORGO cluster |
-| QNN / Snapdragon NPU EP | Not wired — uses NNAPI, not Qualcomm QNN |
+| QNN / Snapdragon NPU EP | Not wired — uses ONNX Runtime NNAPI, not Qualcomm QNN |
 
-Calibration samples are recorded and stored for future training. The demo path loads a pre-exported cluster ONNX bundle for immediate on-device inference.
+Fine-tune requires `pip install -r ml/requirements-training.txt`. GPU recommended; CPU works but is slower (~minutes for 40 clips).
 
 ---
 

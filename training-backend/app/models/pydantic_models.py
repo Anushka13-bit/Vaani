@@ -80,6 +80,22 @@ class SessionStatusResponse(BaseModel):
     resulting_adapter_id: Optional[str] = None
 
 
+class CalibrateResponse(BaseModel):
+    status: str
+    session_id: str
+    job_id: str
+
+
+class SessionAdapterStatusResponse(BaseModel):
+    session_id: str
+    status: Literal["queued", "training", "exporting", "ready", "failed"]
+    progress_pct: int = 0
+    adapter_id: Optional[str] = None
+    job_id: Optional[str] = None
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
 # ── Adapters ─────────────────────────────────────────────────────────────────
 
 class AdapterRecordBackend(BaseModel):

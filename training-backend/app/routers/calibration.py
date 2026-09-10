@@ -11,7 +11,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, Query, UploadFile, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -33,8 +33,10 @@ from app.models.pydantic_models import (
     SessionStatusResponse,
     TrainResponse,
 )
+from app.services.session_status import read_status
 from app.storage.local_storage import get_sample_path, save_upload
 from app.db.init_db import ENGLISH_PROMPT_SET_ID
+from app.workers.train_worker import create_job_record, run_training_job
 
 router = APIRouter(prefix="/calibration", tags=["calibration"])
 
@@ -200,35 +202,48 @@ async def upload_sample(
 @router.post(
     "/sessions/{session_id}/train",
     response_model=TrainResponse,
-    status_code=status.HTTP_501_NOT_IMPLEMENTED,
-    summary="Trigger LoRA training job (STUB — live training disabled)",
+    status_code=status.HTTP_202_ACCEPTED,
+    summary="Trigger local LoRA fine-tune + ONNX export (background task)",
 )
 async def trigger_training(
     session_id: str,
+    background_tasks: BackgroundTasks,
     db: AsyncSession = Depends(get_db),
-    _: UserRecord = Depends(get_current_user),
+    current_user: UserRecord = Depends(get_current_user),
 ) -> TrainResponse:
-    """
-    STUB — live training disabled.
-    Drop your pre-trained adapter weights into training-backend/ml/adapters/
-    and restart the server. The adapter will be registered automatically
-    via adapter_registry.py and served via GET /v1/adapters/clusters.
+    if not settings.LIVE_TRAINING_ENABLED:
+        raise HTTPException(
+            status_code=status.HTTP_501_NOT_IMPLEMENTED,
+            detail={
+                "code": "LIVE_TRAINING_DISABLED",
+                "message": (
+                    "Set LIVE_TRAINING_ENABLED=true and install ml/requirements-training.txt. "
+                    "Fallback: GET /v1/adapters/clusters for pre-baked cluster adapter."
+                ),
+            },
+        )
 
-    Set LIVE_TRAINING_ENABLED=true in config to enable GPU training.
-    """
-    raise HTTPException(
-        status_code=status.HTTP_501_NOT_IMPLEMENTED,
-        detail={
-            "code": "LIVE_TRAINING_DISABLED",
-            "message": (
-                "Live LoRA training pipeline is not enabled. "
-                "Drop your pre-trained adapter weights into "
-                "training-backend/ml/adapters/torgo_cluster_english_v1/adapter_model.bin "
-                "and restart the server. The adapter will be auto-registered and "
-                "served via GET /v1/adapters/clusters?language=en."
-            ),
-        },
+    result = await db.execute(
+        select(CalibrationSessionRecord).where(CalibrationSessionRecord.session_id == session_id)
     )
+    cal_session = result.scalar_one_or_none()
+    if cal_session is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Session not found")
+    if cal_session.user_id != current_user.user_id:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Forbidden")
+    if cal_session.samples_received < 3:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Need at least 3 samples; have {cal_session.samples_received}",
+        )
+
+    job_id = create_job_record(session_id, cal_session.user_id)
+    from app.services.session_status import write_status
+
+    write_status(session_id, status="queued", job_id=job_id, message="Training queued")
+    background_tasks.add_task(run_training_job, job_id, session_id, cal_session.user_id)
+
+    return TrainResponse(job_id=job_id, status="QUEUED")
 
 
 # ── GET status ────────────────────────────────────────────────────────────────
@@ -258,6 +273,25 @@ async def get_session_status(
         .limit(1)
     )
     job = job_result.scalar_one_or_none()
+
+    # Prefer fine-grained status.json when available
+    file_status = read_status(session_id)
+    if file_status:
+        phase = file_status.get("status", "queued")
+        progress_map = {"queued": 10, "training": 45, "exporting": 80, "ready": 100, "failed": 0}
+        db_status = cal_session.status
+        if phase == "ready":
+            db_status = "COMPLETE"
+        elif phase == "failed":
+            db_status = "FAILED"
+        elif phase in ("training", "exporting"):
+            db_status = "TRAINING"
+        return SessionStatusResponse(
+            status=db_status,  # type: ignore[arg-type]
+            job_id=file_status.get("job_id") or (job.job_id if job else None),
+            progress_pct=progress_map.get(phase, 0),
+            resulting_adapter_id=file_status.get("adapter_id") or (job.resulting_adapter_id if job else None),
+        )
 
     progress = 0
     if cal_session.status == "TRAINING":

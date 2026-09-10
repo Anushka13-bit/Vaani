@@ -7,6 +7,7 @@
  *   const token = await backendClient.auth.registerDevice({ device_id: 'abc', preferred_language: 'en' });
  */
 import axios, { AxiosInstance, AxiosRequestConfig } from 'axios';
+import { API_BASE_URL } from '../config/backend';
 import type {
   AdapterMetaResponse,
   CaregiverLinkRequest,
@@ -22,16 +23,16 @@ import type {
   PhrasebookUpdateResponse,
   PromptSetResponse,
   SampleUploadResponse,
+  SessionAdapterStatusResponse,
   SessionStatusResponse,
   TranscriptListResponse,
   UserAdapterResponse,
 } from './dto';
 
 // ── Config ────────────────────────────────────────────────────────────────────
+// See src/config/backend.ts — use adb reverse for USB physical device.
 
-const BASE_URL = __DEV__
-  ? 'http://10.0.2.2:8000/v1'   // Android emulator → host machine localhost
-  : 'https://your-production-server.example.com/v1';
+const BASE_URL = API_BASE_URL;
 
 // ── Client factory ────────────────────────────────────────────────────────────
 
@@ -115,6 +116,16 @@ class TrainingBackendClient {
       );
       return data;
     },
+
+    getSessionAdapterStatus: async (sessionId: string): Promise<SessionAdapterStatusResponse> => {
+      const { data } = await this.http.get<SessionAdapterStatusResponse>(
+        `/adapter/${sessionId}/status`,
+      );
+      return data;
+    },
+
+    getSessionAdapterDownloadUrl: (sessionId: string): string =>
+      `${BASE_URL}/adapter/${sessionId}`,
   };
 
   // ── Adapters ─────────────────────────────────────────────────────────────────

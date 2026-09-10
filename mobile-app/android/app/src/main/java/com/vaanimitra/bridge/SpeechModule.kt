@@ -5,6 +5,8 @@ import com.facebook.react.module.annotations.ReactModule
 import com.vaanimitra.VaaniMitraComponents
 import com.vaanimitra.nlu.PhrasebookSync
 import com.vaanimitra.stt.AdapterDownloader
+import com.vaanimitra.stt.AdapterHandle
+import com.vaanimitra.stt.AdapterType
 import com.vaanimitra.stt.ModelBundleManager
 import com.vaanimitra.stt.OnnxRuntimeHolder
 import com.vaanimitra.wakeword.WakeWordForegroundService
@@ -35,7 +37,6 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun ping(promise: Promise) {
-        Log.d(TAG, "ping() called from RN")
         promise.resolve("pong")
     }
 
@@ -43,12 +44,11 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     fun loadUserAdapter(userId: String, promise: Promise) {
         scope.launch(Dispatchers.IO) {
             try {
-                val handle = adapterManager.loadUserAdapter(userId)
-                whisperEngine.activeAdapterPath = handle.filePath
+                val adapterId = adapterManager.getActiveOnnxAdapterId() ?: "user_$userId"
+                activateOnnxBundle(adapterId)
+                val handle = adapterManager.loadOnnxAdapter(adapterId, AdapterType.USER, 1)
                 promise.resolve(adapterHandleToMap(handle))
-                Log.i(TAG, "loadUserAdapter resolved: ${handle.adapterId}")
             } catch (e: Exception) {
-                Log.e(TAG, "loadUserAdapter failed: ${e.message}")
                 promise.reject("ADAPTER_LOAD_FAILED", e.message, e)
             }
         }
@@ -58,11 +58,38 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     fun loadLanguageAdapter(languageCode: String, promise: Promise) {
         scope.launch(Dispatchers.IO) {
             try {
-                val handle = adapterManager.loadLanguageAdapter(languageCode)
-                whisperEngine.activeAdapterPath = handle.filePath
+                val adapterId = adapterManager.getActiveOnnxAdapterId()
+                    ?: throw IllegalStateException("No ONNX adapter configured")
+                activateOnnxBundle(adapterId)
+                val handle = adapterManager.loadOnnxAdapter(adapterId, AdapterType.CLUSTER, 1)
                 promise.resolve(adapterHandleToMap(handle))
             } catch (e: Exception) {
                 promise.reject("ADAPTER_LOAD_FAILED", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun downloadAndLoadMobileBundle(
+        downloadUrl: String,
+        authToken: String,
+        adapterId: String,
+        version: Int,
+        adapterType: String,
+        promise: Promise,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val type = AdapterType.valueOf(adapterType.uppercase())
+                val handle = downloadExtractAndActivate(downloadUrl, authToken, adapterId, version, type)
+                promise.resolve(adapterHandleToMap(handle).apply {
+                    putString("executionProvider", whisperEngine.executionProvider)
+                    putString("bundlePath", handle.filePath)
+                    putBoolean("mergedLora", true)
+                })
+            } catch (e: Exception) {
+                Log.e(TAG, "downloadAndLoadMobileBundle failed: ${e.message}")
+                promise.reject("ADAPTER_DOWNLOAD_FAILED", e.message, e)
             }
         }
     }
@@ -78,32 +105,63 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     ) {
         scope.launch(Dispatchers.IO) {
             try {
-                val bytes = AdapterDownloader.downloadBytes(mobileBundleUrl, authToken)
-                val bundleDir = ModelBundleManager.bundleDir(reactContext, serverAdapterId)
-                val manifest = ModelBundleManager.extractZip(bytes, bundleDir)
-
                 adapterManager.persistActiveConfig(
                     languageCode = languageCode,
                     clusterAdapterId = serverAdapterId,
                     clusterVersion = version,
                 )
-                val handle = adapterManager.loadLanguageAdapter(languageCode, serverAdapterId)
-                whisperEngine.activeAdapterId = serverAdapterId
-                whisperEngine.activeAdapterPath = bundleDir.absolutePath
-                OnnxRuntimeHolder.release()
-
-                val map = adapterHandleToMap(handle).apply {
-                    putString("executionProvider", whisperEngine.executionProvider)
-                    putString("bundlePath", bundleDir.absolutePath)
-                    putBoolean("mergedLora", manifest.mergedLora)
-                }
-                promise.resolve(map)
-                Log.i(TAG, "Mobile ONNX bundle loaded: $serverAdapterId")
+                val handle = downloadExtractAndActivate(
+                    mobileBundleUrl, authToken, serverAdapterId, version, AdapterType.CLUSTER,
+                )
+                promise.resolve(adapterHandleToMap(handle))
             } catch (e: Exception) {
-                Log.e(TAG, "downloadAndLoadClusterAdapter failed: ${e.message}")
                 promise.reject("ADAPTER_DOWNLOAD_FAILED", e.message, e)
             }
         }
+    }
+
+    @ReactMethod
+    fun downloadAndLoadUserAdapter(
+        downloadUrl: String,
+        authToken: String,
+        userId: String,
+        version: Int,
+        promise: Promise,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val adapterId = "user_$userId"
+                adapterManager.persistActiveConfig(userId = userId, onnxAdapterId = adapterId)
+                val handle = downloadExtractAndActivate(
+                    downloadUrl, authToken, adapterId, version, AdapterType.USER,
+                )
+                promise.resolve(adapterHandleToMap(handle))
+            } catch (e: Exception) {
+                promise.reject("ADAPTER_DOWNLOAD_FAILED", e.message, e)
+            }
+        }
+    }
+
+    private fun downloadExtractAndActivate(
+        url: String,
+        authToken: String,
+        adapterId: String,
+        version: Int,
+        type: AdapterType,
+    ): AdapterHandle {
+        val bytes = AdapterDownloader.downloadBytes(url, authToken)
+        val bundleDir = ModelBundleManager.bundleDir(reactContext, adapterId)
+        ModelBundleManager.extractZip(bytes, bundleDir)
+        adapterManager.persistOnnxAdapter(adapterId, version, type)
+        activateOnnxBundle(adapterId)
+        return adapterManager.loadOnnxAdapter(adapterId, type, version)
+    }
+
+    private fun activateOnnxBundle(adapterId: String) {
+        whisperEngine.activeAdapterId = adapterId
+        whisperEngine.activeAdapterPath = ModelBundleManager.bundleDir(reactContext, adapterId).absolutePath
+        OnnxRuntimeHolder.release()
+        Log.i(TAG, "Activated ONNX bundle: $adapterId")
     }
 
     @ReactMethod
@@ -142,34 +200,14 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     }
 
     @ReactMethod
-    fun downloadAndLoadUserAdapter(
-        downloadUrl: String,
-        authToken: String,
-        userId: String,
-        version: Int,
-        promise: Promise,
-    ) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val bytes = AdapterDownloader.downloadBytes(downloadUrl, authToken)
-                adapterManager.saveUserAdapterBytes(userId, bytes, version)
-                val handle = adapterManager.loadUserAdapter(userId)
-                whisperEngine.activeAdapterPath = handle.filePath
-                promise.resolve(adapterHandleToMap(handle))
-                Log.i(TAG, "User adapter loaded for $userId")
-            } catch (e: Exception) {
-                Log.e(TAG, "downloadAndLoadUserAdapter failed: ${e.message}")
-                promise.reject("ADAPTER_DOWNLOAD_FAILED", e.message, e)
-            }
-        }
-    }
-
-    @ReactMethod
     fun restorePersistedAdapters(promise: Promise) {
         scope.launch(Dispatchers.IO) {
             try {
                 val handles = adapterManager.restorePersistedStack()
-                whisperEngine.activeAdapterPath = handles.firstOrNull()?.filePath
+                val onnxId = adapterManager.getActiveOnnxAdapterId()
+                if (onnxId != null && ModelBundleManager.isBundleReady(reactContext, onnxId)) {
+                    activateOnnxBundle(onnxId)
+                }
                 val array = Arguments.createArray()
                 handles.forEach { array.pushMap(adapterHandleToMap(it)) }
                 promise.resolve(array)
@@ -198,10 +236,10 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
                     putString("text", result.text)
                     putDouble("confidence", result.segments.firstOrNull()?.confidence?.toDouble() ?: 0.0)
                     putString("languageDetected", result.languageDetected)
+                    putString("executionProvider", result.executionProvider)
                 }
                 promise.resolve(map)
             } catch (e: Exception) {
-                Log.e(TAG, "transcribeFile failed: ${e.message}")
                 promise.reject("TRANSCRIBE_FAILED", e.message, e)
             }
         }
@@ -268,7 +306,7 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun adapterHandleToMap(handle: com.vaanimitra.stt.AdapterHandle): WritableMap =
+    private fun adapterHandleToMap(handle: AdapterHandle): WritableMap =
         Arguments.createMap().apply {
             putString("adapterId", handle.adapterId)
             putInt("version", handle.version)

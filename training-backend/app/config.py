@@ -36,14 +36,19 @@ class Settings(BaseSettings):
     # ONNX mobile bundles produced by ml/export_whisper_mobile.py
     MOBILE_EXPORT_DIR: Path = Path(__file__).parent.parent / "ml" / "mobile_export"
 
+    # Per-session training workspace (status.json + batch uploads)
+    SESSIONS_DIR: Path = Path(__file__).parent.parent / "sessions"
+
     # Whisper base model identifier (used in adapter records).
     # Must match the model your LoRA adapters were trained against.
     WHISPER_BASE_MODEL: str = "openai/whisper-small"
 
+    # Cluster adapter used as warm-start for per-user fine-tune (TORGO English).
+    CLUSTER_WARM_START_ADAPTER: str = "torgo_cluster_english_v1"
+
     # ── Training ─────────────────────────────────────────────────────────────
-    # Set to True to enable live LoRA training. Requires GPU + torch/peft deps.
-    # STUB — live training disabled. Drop adapter weights into ml/adapters/ and restart.
-    LIVE_TRAINING_ENABLED: bool = False
+    # Local laptop fine-tune. Requires: pip install -r ml/requirements-training.txt
+    LIVE_TRAINING_ENABLED: bool = True
 
     # Threshold of unsynced corrections before a retrain job is auto-triggered.
     CORRECTION_RETRAIN_THRESHOLD: int = 20

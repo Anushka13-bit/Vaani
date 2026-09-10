@@ -6,7 +6,7 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * AdapterManager — loads, stores, and stacks LoRA adapter files (§2.3).
+ * AdapterManager — tracks active ONNX mobile bundles on device.
  */
 
 enum class AdapterType { USER, LANGUAGE, CLUSTER }
@@ -29,16 +29,14 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
 
     companion object {
         private const val TAG = "AdapterManager"
-        private const val ADAPTERS_DIR = "lora_adapters"
         private const val PREFS_NAME = "vaani_adapters"
         private const val KEY_LANGUAGE = "active_language"
         private const val KEY_USER_ID = "active_user_id"
         private const val KEY_CLUSTER_ID = "active_cluster_id"
         private const val KEY_CLUSTER_VERSION = "active_cluster_version"
-    }
-
-    private val adaptersDir: File by lazy {
-        File(context.filesDir, ADAPTERS_DIR).also { it.mkdirs() }
+        private const val KEY_ONNX_ADAPTER_ID = "active_onnx_adapter_id"
+        private const val KEY_ONNX_VERSION = "active_onnx_version"
+        private const val KEY_ONNX_TYPE = "active_onnx_type"
     }
 
     private val prefs by lazy {
@@ -47,124 +45,101 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
 
     private val stackedAdapters = mutableListOf<AdapterHandle>()
 
-    override fun loadUserAdapter(userId: String): AdapterHandle {
-        val file = File(adaptersDir, "user_${userId}.bin")
-        if (!file.exists()) {
-            Log.w(TAG, "USER adapter not found for userId=$userId. Download first.")
-            throw IllegalStateException("User adapter not found for userId=$userId. Run calibration first.")
+    fun getActiveOnnxAdapterId(): String? = prefs.getString(KEY_ONNX_ADAPTER_ID, null)
+
+    fun persistOnnxAdapter(adapterId: String, version: Int, type: AdapterType) {
+        prefs.edit()
+            .putString(KEY_ONNX_ADAPTER_ID, adapterId)
+            .putInt(KEY_ONNX_VERSION, version)
+            .putString(KEY_ONNX_TYPE, type.name)
+            .apply()
+    }
+
+    fun loadOnnxAdapter(adapterId: String, type: AdapterType, version: Int): AdapterHandle {
+        val bundleDir = ModelBundleManager.bundleDir(context, adapterId)
+        if (!ModelBundleManager.isBundleReady(context, adapterId)) {
+            throw IllegalStateException("ONNX bundle not ready for $adapterId")
         }
+        val manifest = ModelBundleManager.readManifest(bundleDir)
         val handle = AdapterHandle(
-            adapterId = "user_$userId",
-            version = prefs.getInt("user_${userId}_version", 1),
-            type = AdapterType.USER,
-            filePath = file.absolutePath,
-            checksum = sha256(file),
+            adapterId = adapterId,
+            version = version,
+            type = type,
+            filePath = bundleDir.absolutePath,
+            checksum = manifest?.let { sha256Dir(bundleDir) } ?: "",
         )
-        stackedAdapters.removeAll { it.type == AdapterType.USER }
+        stackedAdapters.removeAll { it.adapterId == adapterId }
         stackedAdapters.add(handle)
-        persistActiveConfig(userId = userId)
-        Log.i(TAG, "Loaded USER adapter: ${handle.adapterId}")
+        Log.i(TAG, "Loaded ONNX ${type.name} adapter: $adapterId")
         return handle
+    }
+
+    override fun loadUserAdapter(userId: String): AdapterHandle {
+        val adapterId = getActiveOnnxAdapterId() ?: "user_$userId"
+        return loadOnnxAdapter(adapterId, AdapterType.USER, prefs.getInt(KEY_ONNX_VERSION, 1))
     }
 
     override fun loadLanguageAdapter(
         languageCode: String,
         serverAdapterId: String?,
     ): AdapterHandle {
-        val file = File(adaptersDir, languageFileName(languageCode))
-        if (!file.exists()) {
-            Log.w(TAG, "Language adapter not found for lang=$languageCode")
-            throw IllegalStateException("Language adapter not found: $languageCode")
-        }
-
-        val clusterId = serverAdapterId ?: prefs.getString(KEY_CLUSTER_ID, null) ?: "lang_$languageCode"
-        val version = prefs.getInt(KEY_CLUSTER_VERSION, 1)
-        val type = if (serverAdapterId != null || clusterId.startsWith("torgo_") || clusterId.contains("cluster")) {
-            AdapterType.CLUSTER
-        } else {
-            AdapterType.LANGUAGE
-        }
-
-        val handle = AdapterHandle(
-            adapterId = clusterId,
-            version = version,
-            type = type,
-            filePath = file.absolutePath,
-            checksum = sha256(file),
-        )
-        stackedAdapters.removeAll { it.type == AdapterType.LANGUAGE || it.type == AdapterType.CLUSTER }
-        stackedAdapters.add(handle)
-        persistActiveConfig(
-            languageCode = languageCode,
-            userId = null,
-            clusterAdapterId = clusterId,
-            clusterVersion = version,
-        )
-        Log.i(TAG, "Loaded ${type.name} adapter: ${handle.adapterId} (lang=$languageCode)")
-        return handle
+        val adapterId = serverAdapterId ?: getActiveOnnxAdapterId()
+            ?: throw IllegalStateException("No ONNX adapter for language $languageCode")
+        val type = if (adapterId.startsWith("user_")) AdapterType.USER else AdapterType.CLUSTER
+        return loadOnnxAdapter(adapterId, type, prefs.getInt(KEY_ONNX_VERSION, 1))
     }
 
     fun loadLanguageAdapter(languageCode: String): AdapterHandle =
         loadLanguageAdapter(languageCode, null)
-
-    fun saveLanguageAdapterBytes(languageCode: String, bytes: ByteArray): File {
-        val file = File(adaptersDir, languageFileName(languageCode))
-        file.writeBytes(bytes)
-        Log.i(TAG, "Saved language adapter for '$languageCode' → ${file.absolutePath}")
-        return file
-    }
-
-    fun saveUserAdapterBytes(userId: String, bytes: ByteArray, version: Int = 1): File {
-        val file = File(adaptersDir, "user_${userId}.bin")
-        file.writeBytes(bytes)
-        prefs.edit().putInt("user_${userId}_version", version).apply()
-        Log.i(TAG, "Saved user adapter for '$userId' → ${file.absolutePath}")
-        return file
-    }
 
     fun persistActiveConfig(
         languageCode: String? = null,
         userId: String? = null,
         clusterAdapterId: String? = null,
         clusterVersion: Int? = null,
+        onnxAdapterId: String? = null,
     ) {
         prefs.edit().apply {
             if (languageCode != null) putString(KEY_LANGUAGE, languageCode)
             if (userId != null) putString(KEY_USER_ID, userId)
             if (clusterAdapterId != null) putString(KEY_CLUSTER_ID, clusterAdapterId)
             if (clusterVersion != null) putInt(KEY_CLUSTER_VERSION, clusterVersion)
+            if (onnxAdapterId != null) putString(KEY_ONNX_ADAPTER_ID, onnxAdapterId)
         }.apply()
     }
 
     fun restorePersistedStack(): List<AdapterHandle> {
         stackedAdapters.clear()
-        val handles = mutableListOf<AdapterHandle>()
+        val onnxId = getActiveOnnxAdapterId()
+        if (onnxId == null) return emptyList()
 
-        val language = prefs.getString(KEY_LANGUAGE, null)
-        val clusterId = prefs.getString(KEY_CLUSTER_ID, null)
-        if (language != null) {
-            try {
-                handles.add(loadLanguageAdapter(language, clusterId))
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not restore language adapter: ${e.message}")
-            }
+        val typeName = prefs.getString(KEY_ONNX_TYPE, AdapterType.CLUSTER.name) ?: AdapterType.CLUSTER.name
+        val type = try {
+            AdapterType.valueOf(typeName)
+        } catch (_: Exception) {
+            AdapterType.CLUSTER
         }
+        val version = prefs.getInt(KEY_ONNX_VERSION, 1)
 
-        val userId = prefs.getString(KEY_USER_ID, null)
-        if (userId != null) {
-            try {
-                handles.add(loadUserAdapter(userId))
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not restore user adapter: ${e.message}")
+        return try {
+            if (ModelBundleManager.isBundleReady(context, onnxId)) {
+                listOf(loadOnnxAdapter(onnxId, type, version))
+            } else {
+                Log.w(TAG, "Persisted ONNX bundle missing on disk: $onnxId")
+                emptyList()
             }
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not restore ONNX adapter: ${e.message}")
+            emptyList()
         }
-
-        return handles
     }
 
     override fun currentStackedAdapters(): List<AdapterHandle> = stackedAdapters.toList()
 
-    private fun languageFileName(languageCode: String): String = "lang_${languageCode}.bin"
+    private fun sha256Dir(dir: File): String {
+        val manifest = File(dir, "mobile_manifest.json")
+        return if (manifest.isFile) sha256(manifest) else ""
+    }
 
     private fun sha256(file: File): String {
         val digest = MessageDigest.getInstance("SHA-256")
