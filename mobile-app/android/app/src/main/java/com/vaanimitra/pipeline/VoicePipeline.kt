@@ -5,6 +5,7 @@ import android.util.Log
 import com.vaanimitra.VaaniMitraComponents
 import com.vaanimitra.audio.AudioCaptureManager
 import com.vaanimitra.audio.VoiceActivityDetector
+import com.vaanimitra.bridge.RecognitionEventEmitter
 import com.vaanimitra.nlu.ActionType
 import com.vaanimitra.stt.AndroidSpeechRecognizerFallback
 import com.vaanimitra.stt.ConfidenceScorer
@@ -21,6 +22,16 @@ import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * End-to-end: VAD capture → TORGO Whisper ONNX → confidence → phrasebook/NLU → gated action.
+ *
+ * Mic contention contract:
+ *   Caller (WakeWordForegroundService) MUST have stopped the wake-word engine before calling
+ *   runCommandSession(). This function opens AudioRecord, does its work, then calls onComplete()
+ *   which is the caller's signal to restart the wake engine. onComplete() is guaranteed to be
+ *   called regardless of how the session exits (timeout, silence, error).
+ *
+ * DICTATE_TEXT:
+ *   If the recognized utterance matches no action keyword, the transcript is emitted to React
+ *   Native via RecognitionEventEmitter.emitTranscriptSegment rather than silently discarded.
  */
 object VoicePipeline {
 
@@ -30,6 +41,10 @@ object VoicePipeline {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
+    /**
+     * Launch a command session coroutine.
+     * [onComplete] is always called, even on timeout or exception, so the wake engine can resume.
+     */
     fun runCommandSession(context: Context, onComplete: () -> Unit = {}) {
         scope.launch {
             try {
@@ -37,6 +52,7 @@ object VoicePipeline {
             } catch (e: Exception) {
                 Log.e(TAG, "Session failed: ${e.message}", e)
             } finally {
+                // Guaranteed: wake engine will always get to restart
                 onComplete()
             }
         }
@@ -57,11 +73,11 @@ object VoicePipeline {
         val activeAdapter = adapterManager.currentStackedAdapters().firstOrNull()
         val adapterId = activeAdapter?.adapterId ?: "torgo_cluster_english_v1"
 
-        // VAD-gated capture with timeout (not fixed 8s hot mic forever)
+        // VAD-gated capture with 8s hard timeout — returns to wake listening on silence/timeout
         val pcm = withTimeoutOrNull(LISTEN_TIMEOUT_MS) {
             captureWithVad(capture, vad)
         } ?: run {
-            Log.w(TAG, "Listen timeout — no speech")
+            Log.w(TAG, "Listen timeout (${LISTEN_TIMEOUT_MS}ms) — no speech detected; returning to wake listening")
             return
         }
 
@@ -97,13 +113,17 @@ object VoicePipeline {
         }
 
         val phraseMatch = phrasebook.match(finalText)
-        val intent = if (phraseMatch.matched && phraseMatch.intent != null) {
-            phraseMatch.intent!!
-        } else {
-            parser.parse(finalText)
-        }
+        val intent = (if (phraseMatch.matched) phraseMatch.intent else null) ?: parser.parse(finalText)
 
-        if (intent.action == ActionType.DICTATE_TEXT) return
+        // DICTATE_TEXT: no action keyword — emit transcript to RN so UI and dictation consumers
+        // receive the text rather than dropping it silently (v1: actions-only but RN still sees it)
+        if (intent.action == ActionType.DICTATE_TEXT) {
+            Log.d(TAG, "DICTATE_TEXT — emitting transcript to React Native: $finalText")
+            RecognitionEventEmitter.instance?.emitTranscriptSegment(
+                TranscriptSegment(finalText, 0, pcm.size * 1000L / 16000, avgLogProb)
+            )
+            return
+        }
 
         val confirmed = ConfirmationGate.confirmIfNeeded(app, intent)
         if (!confirmed) {
@@ -116,7 +136,7 @@ object VoicePipeline {
         }
     }
 
-    /** Stream until silence or max duration. */
+    /** Stream until 1.5s silence or 8s hard max. Exits naturally when VAD silence threshold met. */
     private suspend fun captureWithVad(
         capture: AudioCaptureManager,
         vad: VoiceActivityDetector,
@@ -126,15 +146,22 @@ object VoicePipeline {
         var lastSpeech = System.currentTimeMillis()
         val start = System.currentTimeMillis()
 
-        capture.streamPcm { chunk ->
-            buffer.addAll(chunk.toList())
-            val frame = if (chunk.size >= 480) chunk.copyOfRange(0, 480) else chunk
-            if (vad.isSpeech(frame)) lastSpeech = System.currentTimeMillis()
-            if (System.currentTimeMillis() - lastSpeech > SILENCE_END_MS && buffer.size > 1600) {
-                capture.stopStreaming()
+        try {
+            capture.streamPcm { chunk ->
+                buffer.addAll(chunk.toList())
+                val frame = if (chunk.size >= 480) chunk.copyOfRange(0, 480) else chunk
+                if (vad.isSpeech(frame)) lastSpeech = System.currentTimeMillis()
+                val silenced = System.currentTimeMillis() - lastSpeech > SILENCE_END_MS && buffer.size > 1600
+                val maxed = buffer.size >= maxSamples
+                val timedOut = System.currentTimeMillis() - start > LISTEN_TIMEOUT_MS
+                if (silenced || maxed || timedOut) {
+                    val cause = when { silenced -> "silence"; maxed -> "max-samples"; else -> "timeout" }
+                    Log.d(TAG, "captureWithVad stopping — reason=$cause samples=${buffer.size}")
+                    capture.stopStreaming()
+                }
             }
-            if (buffer.size >= maxSamples) capture.stopStreaming()
-            if (System.currentTimeMillis() - start > LISTEN_TIMEOUT_MS) capture.stopStreaming()
+        } finally {
+            capture.stopStreaming()
         }
 
         val arr = buffer.toShortArray()

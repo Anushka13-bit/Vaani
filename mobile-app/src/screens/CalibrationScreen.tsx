@@ -19,6 +19,8 @@ import {
   downloadAndLoadClusterAdapter,
   downloadAndLoadUserAdapter,
 } from '../services/adapterService';
+import DeviceInfo from 'react-native-device-info';
+import { LocalDb } from '../storage/localDb';
 
 const recorder = new AudioRecorderPlayer();
 const POLL_INTERVAL_MS = 3000;
@@ -45,7 +47,7 @@ function networkErrorMessage(): string {
 }
 
 export default function CalibrationScreen({ navigation }: any) {
-  const { userId, preferredLanguage, dysarthriaSeverityHint, setActiveAdapters } = useStore();
+  const { userId, preferredLanguage, dysarthriaSeverityHint, setActiveAdapters, setAuth } = useStore();
 
   const [prompts, setPrompts] = useState<Prompt[]>([]);
   const [promptSetId, setPromptSetId] = useState('');
@@ -74,18 +76,47 @@ export default function CalibrationScreen({ navigation }: any) {
     try {
       setPhase('loading');
       setErrorMsg('');
-      const resp = await backendClient.calibration.getPrompts(preferredLanguage, 40);
+
+      let currentUserId = userId;
+      if (!currentUserId || !backendClient.getToken()) {
+        try {
+          const auth = await LocalDb.loadAuth();
+          if (auth && new Date(auth.expiresAt) > new Date()) {
+            backendClient.setToken(auth.accessToken);
+            setAuth(auth.userId, auth.accessToken);
+            currentUserId = auth.userId;
+          } else {
+            const deviceId = await DeviceInfo.getUniqueId();
+            const resp = await backendClient.auth.registerDevice({
+              device_id: deviceId,
+              preferred_language: preferredLanguage || 'en',
+            });
+            await LocalDb.saveAuth({
+              userId: resp.user_id,
+              accessToken: resp.access_token,
+              expiresAt: resp.expires_at,
+            });
+            backendClient.setToken(resp.access_token);
+            setAuth(resp.user_id, resp.access_token);
+            currentUserId = resp.user_id;
+          }
+        } catch (authErr) {
+          console.warn('[CalibrationScreen] Auto-register failed:', authErr);
+        }
+      }
+
+      const resp = await backendClient.calibration.getPrompts(preferredLanguage, 5);
       setPrompts(resp.prompts);
       setPromptSetId(resp.prompt_set_id);
 
-      if (!userId) {
+      if (!currentUserId) {
         setErrorMsg('User not registered. Restart the app.');
         setPhase('error');
         return;
       }
 
       const session = await backendClient.calibration.createSession({
-        user_id: userId,
+        user_id: currentUserId,
         prompt_set_id: resp.prompt_set_id,
       });
       setSessionId(session.session_id);
@@ -94,7 +125,7 @@ export default function CalibrationScreen({ navigation }: any) {
       setErrorMsg(isNetworkError(e) ? networkErrorMessage() : (e?.message ?? 'Failed to load prompts'));
       setPhase('error');
     }
-  }, [userId, preferredLanguage]);
+  }, [userId, preferredLanguage, setAuth]);
 
   useEffect(() => {
     loadCalibrationData();

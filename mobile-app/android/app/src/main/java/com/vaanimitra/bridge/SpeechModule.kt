@@ -9,6 +9,7 @@ import com.vaanimitra.stt.AdapterHandle
 import com.vaanimitra.stt.AdapterType
 import com.vaanimitra.stt.ModelBundleManager
 import com.vaanimitra.stt.OnnxRuntimeHolder
+import com.vaanimitra.util.PermissionHelper
 import com.vaanimitra.wakeword.WakeWordForegroundService
 import android.content.Intent
 import android.os.Build
@@ -167,6 +168,13 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun startWakeWordService(promise: Promise) {
         try {
+            if (!PermissionHelper.hasVoicePermissions(reactContext)) {
+                val reason = "Voice permissions not granted (RECORD_AUDIO or POST_NOTIFICATIONS)"
+                WakeWordForegroundService.lastStopReason = reason
+                RecognitionEventEmitter.instance?.emitWakeWordError(reason)
+                promise.reject("PERMISSION_DENIED", reason)
+                return
+            }
             val intent = Intent(reactContext, WakeWordForegroundService::class.java).apply {
                 action = WakeWordForegroundService.ACTION_START
             }
@@ -197,6 +205,20 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     @ReactMethod
     fun isWakeWordServiceRunning(promise: Promise) {
         promise.resolve(WakeWordForegroundService.isRunning)
+    }
+
+    @ReactMethod
+    fun checkVoicePermissions(promise: Promise) {
+        try {
+            promise.resolve(PermissionHelper.hasVoicePermissions(reactContext))
+        } catch (e: Exception) {
+            promise.reject("PERMISSION_CHECK_FAILED", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun getWakeWordStopReason(promise: Promise) {
+        promise.resolve(WakeWordForegroundService.lastStopReason)
     }
 
     @ReactMethod

@@ -54,3 +54,8 @@ mobile-app/android/app/src/main/assets/*.onnx
 caregiver-dashboard/node_modules/
 caregiver-dashboard/dist/
 caregiver-dashboard/build/
+
+mobile-app/android/gradle/wrapper/*.zip
+
+
+mobile-app/android/gradle/wrapper/*.zip

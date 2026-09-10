@@ -23,41 +23,6 @@ ENGLISH_PROMPTS = [
     "Turn off the light.",
     "What time is it?",
     "I am feeling tired.",
-    "Help me please.",
-    "Open the door.",
-    "Send a message to Ravi.",
-    "Set an alarm for seven.",
-    "I want to go home.",
-    "Play some music.",
-    "Can you repeat that?",
-    "Yes, that is correct.",
-    "No thank you.",
-    "I am hungry.",
-    "Call the doctor.",
-    "Turn up the volume.",
-    "Search for nearby restaurants.",
-    "Read my messages.",
-    "Set a reminder.",
-    "Good morning.",
-    "Good night.",
-    "I love you.",
-    "Thank you very much.",
-    "I need help.",
-    "Please slow down.",
-    "Where is the bathroom?",
-    "I am in pain.",
-    "Can I have some food?",
-    "I want to sleep.",
-    "Please be quiet.",
-    "I do not understand.",
-    "Say that again.",
-    "Call an ambulance.",
-    "I am cold.",
-    "I am hot.",
-    "Open a new tab.",
-    "Take a photo.",
-    "Pause the video.",
-    "Stop playing music.",
 ]
 
 ENGLISH_PROMPT_SET_ID = "torgo_en_v1"
@@ -74,14 +39,11 @@ async def init_db() -> None:
 
 
 async def _seed_prompts(session: AsyncSession) -> None:
-    """Insert English calibration prompts if they don't exist yet."""
-    from sqlalchemy import select
-    result = await session.execute(
-        select(PromptRecord).where(PromptRecord.prompt_set_id == ENGLISH_PROMPT_SET_ID).limit(1)
+    """Insert or sync English calibration prompts."""
+    from sqlalchemy import delete
+    await session.execute(
+        delete(PromptRecord).where(PromptRecord.prompt_set_id == ENGLISH_PROMPT_SET_ID)
     )
-    if result.scalar_one_or_none() is not None:
-        return  # already seeded
-
     for i, text in enumerate(ENGLISH_PROMPTS, start=1):
         session.add(PromptRecord(
             prompt_id=f"torgo_en_{i:03d}",

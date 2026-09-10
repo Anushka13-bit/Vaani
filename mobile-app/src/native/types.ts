@@ -81,3 +81,12 @@ export interface CorrectionRecord {
   createdAt: number;
   syncedToBackend: boolean;
 }
+
+// ── Wake Word ─────────────────────────────────────────────────────────────────
+
+export interface WakeWordEvent {
+  model: string;
+  score: number;
+  timestamp: number;
+}
+

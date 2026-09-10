@@ -18,8 +18,10 @@ import com.rementia.openwakeword.lib.model.DetectionMode
 import com.rementia.openwakeword.lib.model.WakeWordModel
 import com.vaanimitra.MainActivity
 import com.vaanimitra.R
+import com.vaanimitra.bridge.RecognitionEventEmitter
 import com.vaanimitra.pipeline.VoicePipeline
 import com.vaanimitra.pipeline.VoiceSessionController
+import com.vaanimitra.util.PermissionHelper
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -34,6 +36,12 @@ import kotlinx.coroutines.launch
  *   - melspectrogram.onnx
  *   - embedding_model.onnx
  *   - hey_lily.onnx  (custom) OR hey_jarvis_v0.1.onnx (dev fallback)
+ *
+ * Mic contention resolution:
+ *   The WakeWordEngine holds AudioRecord continuously. When a detection fires, we call
+ *   engine.stop() to release the hardware mic, hand control to VoicePipeline, then
+ *   call engine.start() again in the completion callback. This prevents a second
+ *   AudioRecord from colliding on the same VOICE_RECOGNITION audio source.
  */
 class WakeWordForegroundService : Service() {
 
@@ -42,10 +50,12 @@ class WakeWordForegroundService : Service() {
         private const val CHANNEL_ID = "vaani_wake_word"
         private const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.vaanimitra.wakeword.START"
-        const val ACTION_STOP = "com.vaanimitra.wakeword.STOP"
+        const val ACTION_STOP  = "com.vaanimitra.wakeword.STOP"
 
-        @Volatile
-        var isRunning = false
+        @Volatile var isRunning = false
+
+        /** Exposed so SpeechModule can surface it to React Native. */
+        @Volatile var lastStopReason: String = ""
     }
 
     private var wakeWordEngine: WakeWordEngine? = null
@@ -59,6 +69,7 @@ class WakeWordForegroundService : Service() {
         when (intent?.action) {
             ACTION_STOP -> {
                 stopListening()
+                lastStopReason = ""
                 stopSelf()
                 return START_NOT_STICKY
             }
@@ -73,24 +84,37 @@ class WakeWordForegroundService : Service() {
     private fun startListening() {
         if (wakeWordEngine != null) return
 
+        if (!PermissionHelper.hasVoicePermissions(this)) {
+            val reason = "Voice permissions not granted (RECORD_AUDIO or POST_NOTIFICATIONS)"
+            Log.e(TAG, reason)
+            lastStopReason = reason
+            RecognitionEventEmitter.instance?.emitWakeWordError(reason)
+            stopSelf()
+            return
+        }
+
         val modelPath = resolveWakeWordModel() ?: run {
-            Log.e(
-                TAG,
-                "No wake word model in assets. Run: ./scripts/download_wakeword_models.sh",
-            )
+            val reason = "No wake word model in assets. Run: ./scripts/download_wakeword_models.sh"
+            Log.e(TAG, reason)
+            lastStopReason = reason
+            RecognitionEventEmitter.instance?.emitWakeWordError(reason)
             stopSelf()
             return
         }
 
         if (!hasAsset("melspectrogram.onnx") || !hasAsset("embedding_model.onnx")) {
-            Log.e(TAG, "Missing melspectrogram.onnx or embedding_model.onnx in assets")
+            val reason = "Missing melspectrogram.onnx or embedding_model.onnx in assets"
+            Log.e(TAG, reason)
+            lastStopReason = reason
+            RecognitionEventEmitter.instance?.emitWakeWordError(reason)
             stopSelf()
             return
         }
 
         try {
+            val modelName = if (modelPath.contains("lily", ignoreCase = true)) "Hey Lily" else "Hey Jarvis"
             val model = WakeWordModel(
-                name = "Hey Lily",
+                name = modelName,
                 modelPath = modelPath,
                 threshold = 0.08f,
             )
@@ -105,15 +129,19 @@ class WakeWordForegroundService : Service() {
             detectionJob = scope.launch {
                 engine.detections.collect { detection ->
                     Log.i(TAG, "Wake word detected: ${detection.model.name} score=${detection.score}")
-                    onWakeWordDetected()
+                    onWakeWordDetected(detection.model.name, detection.score)
                 }
             }
 
             engine.start()
             isRunning = true
+            lastStopReason = ""
             Log.i(TAG, "openWakeWord listening (CPU/ONNX) model=$modelPath")
         } catch (e: Exception) {
-            Log.e(TAG, "openWakeWord init failed: ${e.message}", e)
+            val reason = "openWakeWord init failed: ${e.message}"
+            Log.e(TAG, reason, e)
+            lastStopReason = reason
+            RecognitionEventEmitter.instance?.emitWakeWordError(reason)
             stopSelf()
         }
     }
@@ -122,7 +150,7 @@ class WakeWordForegroundService : Service() {
     private fun resolveWakeWordModel(): String? = when {
         hasAsset("hey_lily.onnx") -> "hey_lily.onnx"
         hasAsset("hey_jarvis_v0.1.onnx") -> {
-            Log.w(TAG, "hey_lily.onnx not found — using hey_jarvis_v0.1.onnx. Train Hey Lily with openWakeWord.")
+            Log.w(TAG, "hey_lily.onnx not found — using hey_jarvis_v0.1.onnx as dev fallback")
             "hey_jarvis_v0.1.onnx"
         }
         else -> null
@@ -135,14 +163,43 @@ class WakeWordForegroundService : Service() {
         false
     }
 
-    private fun onWakeWordDetected() {
+    private fun onWakeWordDetected(modelName: String, score: Float) {
         if (!sessionController.tryAcquire()) {
-            Log.d(TAG, "Debounced — session already active")
+            Log.d(TAG, "Debounced — command session already active")
             return
         }
+
+        // Emit event to React Native (listening indicator, analytics)
+        RecognitionEventEmitter.instance?.emitWakeWordDetected(modelName, score)
+
         vibrateAck()
+
+        // ── Mic Contention Resolution ────────────────────────────────────────
+        // Stop the wake engine to release the AudioRecord hardware channel.
+        // VoicePipeline.runCommandSession() will open its own AudioRecord while the
+        // engine is paused. On completion, we restart the engine.
+        val engine = wakeWordEngine
+        try {
+            engine?.stop()
+            Log.d(TAG, "WakeWordEngine paused — mic handed to VoicePipeline")
+        } catch (e: Exception) {
+            Log.w(TAG, "Failed to pause engine before command session: ${e.message}")
+        }
+
         VoicePipeline.runCommandSession(applicationContext) {
+            // Called on completion (timeout, silence-end, success, or error)
             sessionController.release()
+            if (isRunning) {
+                try {
+                    engine?.start()
+                    Log.i(TAG, "WakeWordEngine resumed after command session")
+                } catch (e: Exception) {
+                    val reason = "Failed to resume WakeWordEngine: ${e.message}"
+                    Log.e(TAG, reason, e)
+                    lastStopReason = reason
+                    RecognitionEventEmitter.instance?.emitWakeWordError(reason)
+                }
+            }
         }
     }
 
@@ -175,9 +232,10 @@ class WakeWordForegroundService : Service() {
     }
 
     private fun buildNotification(): Notification {
+        val modelLabel = if (resolveWakeWordModel()?.contains("lily", ignoreCase = true) == true) "Hey Lily" else "Hey Jarvis"
         val channel = NotificationChannel(
             CHANNEL_ID, "VaaniMitra Voice", NotificationManager.IMPORTANCE_LOW,
-        ).apply { description = "Listening for \"Hey Lily\"" }
+        ).apply { description = "Listening for \"$modelLabel\"" }
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
 
         val openApp = PendingIntent.getActivity(
@@ -186,7 +244,7 @@ class WakeWordForegroundService : Service() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("VaaniMitra listening")
-            .setContentText("Say \"Hey Lily\" to give a command")
+            .setContentText("Say \"$modelLabel\" to give a command")
             .setSmallIcon(R.mipmap.ic_launcher)
             .setContentIntent(openApp)
             .setOngoing(true)

@@ -10,6 +10,7 @@ import { AccessibilityBridge } from '../native/AccessibilityBridge';
 import { SpeechBridge } from '../native/SpeechBridge';
 import { LocalDb } from '../storage/localDb';
 import { downloadAndLoadClusterAdapter } from '../services/adapterService';
+import { requestVoicePermissions } from '../App';
 
 export default function SettingsScreen({ navigation }: any) {
   const {
@@ -17,13 +18,19 @@ export default function SettingsScreen({ navigation }: any) {
     preferredLanguage,
     dysarthriaSeverityHint,
     correctionSyncOptIn,
+    wakeWordEnabled,
+    wakeWordListening,
+    lastWakeWordEvent,
+    wakeWordStopReason,
     setActiveAdapters,
     setCorrectionSyncOptIn,
+    setWakeWordEnabled,
+    setWakeWordListening,
+    setWakeWordStopReason,
     clearAuth,
   } = useStore();
 
   const [accessibilityEnabled, setAccessibilityEnabled] = useState(false);
-  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const refreshAdapters = useCallback(async () => {
@@ -46,19 +53,62 @@ export default function SettingsScreen({ navigation }: any) {
       .then(setAccessibilityEnabled)
       .catch(() => {});
     refreshAdapters();
-    SpeechBridge.isWakeWordServiceRunning().then(setWakeWordEnabled).catch(() => {});
-  }, [refreshAdapters]);
+    SpeechBridge.isWakeWordServiceRunning()
+      .then((running) => {
+        setWakeWordListening(running);
+      })
+      .catch(() => {});
+    SpeechBridge.getWakeWordStopReason()
+      .then((reason) => {
+        if (reason) setWakeWordStopReason(reason);
+      })
+      .catch(() => {});
+  }, [refreshAdapters, setWakeWordListening, setWakeWordStopReason]);
 
   const toggleWakeWord = async (enable: boolean) => {
-    try {
-      if (enable) {
-        await SpeechBridge.startWakeWordService();
-      } else {
-        await SpeechBridge.stopWakeWordService();
+    if (enable) {
+      // Dynamic permission check and request
+      let hasPermissions = await SpeechBridge.checkVoicePermissions();
+      if (!hasPermissions) {
+        hasPermissions = await requestVoicePermissions();
       }
-      setWakeWordEnabled(enable);
-    } catch (e: any) {
-      Alert.alert('Wake word error', e?.message ?? 'Could not toggle Hey Lily listener');
+
+      if (!hasPermissions) {
+        Alert.alert(
+          'Permissions Required',
+          'Microphone and Notification permissions are required to activate "Hey Lily" wake word listening. Please grant permissions in device Settings.',
+        );
+        setWakeWordEnabled(false);
+        setWakeWordListening(false);
+        await LocalDb.saveSettings({ wakeWordEnabled: false });
+        return;
+      }
+
+      try {
+        await SpeechBridge.startWakeWordService();
+        const isRunning = await SpeechBridge.isWakeWordServiceRunning();
+        setWakeWordEnabled(true);
+        setWakeWordListening(isRunning);
+        setWakeWordStopReason(null);
+        await LocalDb.saveSettings({ wakeWordEnabled: true });
+      } catch (e: any) {
+        const err = e?.message ?? 'Could not start wake word listener';
+        setWakeWordEnabled(false);
+        setWakeWordListening(false);
+        setWakeWordStopReason(err);
+        await LocalDb.saveSettings({ wakeWordEnabled: false });
+        Alert.alert('Wake word error', err);
+      }
+    } else {
+      try {
+        await SpeechBridge.stopWakeWordService();
+        setWakeWordEnabled(false);
+        setWakeWordListening(false);
+        setWakeWordStopReason(null);
+        await LocalDb.saveSettings({ wakeWordEnabled: false });
+      } catch (e: any) {
+        Alert.alert('Wake word error', e?.message ?? 'Could not stop wake word service');
+      }
     }
   };
 
@@ -131,19 +181,43 @@ export default function SettingsScreen({ navigation }: any) {
       )}
 
       <SectionHeader title="Hey Lily (Wake Word)" />
-      <View style={styles.row}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.rowLabel}>Listen for &quot;Hey Lily&quot;</Text>
-          <Text style={styles.rowSub}>
-            Hands-free commands via foreground service (vibrate on wake). Until hey_lily.onnx
-            is trained, dev builds use &quot;Hey Jarvis&quot; as the wake phrase.
-          </Text>
+      <View style={styles.card}>
+        <View style={styles.rowBetween}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={styles.cardTitle}>Listen for &quot;Hey Lily&quot;</Text>
+            <Text style={styles.cardSub}>
+              Hands-free commands via foreground service. Until hey_lily.onnx is trained, dev builds use &quot;Hey Jarvis&quot;.
+            </Text>
+          </View>
+          <Switch
+            value={wakeWordEnabled}
+            onValueChange={toggleWakeWord}
+            trackColor={{ true: '#6C63FF' }}
+          />
         </View>
-        <Switch
-          value={wakeWordEnabled}
-          onValueChange={toggleWakeWord}
-          trackColor={{ true: '#6C63FF' }}
-        />
+
+        <View style={styles.statusBox}>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusDot, wakeWordListening ? styles.statusDotActive : styles.statusDotInactive]} />
+            <Text style={[styles.statusText, wakeWordListening ? styles.statusTextActive : styles.statusTextInactive]}>
+              {wakeWordListening
+                ? 'Listening for "Hey Jarvis" / "Hey Lily"'
+                : 'Service Stopped'}
+            </Text>
+          </View>
+
+          {lastWakeWordEvent && (
+            <Text style={styles.lastEventText}>
+              Last detected: &quot;{lastWakeWordEvent.model}&quot; (score: {(lastWakeWordEvent.score * 100).toFixed(0)}%) at {new Date(lastWakeWordEvent.timestamp).toLocaleTimeString()}
+            </Text>
+          )}
+
+          {wakeWordStopReason ? (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorText}>⚠️ {wakeWordStopReason}</Text>
+            </View>
+          ) : null}
+        </View>
       </View>
 
       <SectionHeader title="Voice Activation" />
@@ -227,10 +301,22 @@ const styles = StyleSheet.create({
   cardSub: { color: '#888', fontSize: 12, marginTop: 2, lineHeight: 18 },
   bold: { color: '#ccc', fontWeight: '600' },
   row: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1A1A2E', borderRadius: 12, padding: 16, marginBottom: 8 },
+  rowBetween: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   rowLabel: { color: '#E8E8FF', fontSize: 14, fontWeight: '500' },
   rowSub: { color: '#888', fontSize: 12, marginTop: 2 },
   dimText: { color: '#555', fontSize: 14, marginBottom: 12 },
   btn: { backgroundColor: '#6C63FF', borderRadius: 10, padding: 14, alignItems: 'center', marginTop: 8 },
   secondaryBtn: { backgroundColor: '#3A3A5E' },
   btnText: { color: '#fff', fontWeight: '700', fontSize: 14 },
+  statusBox: { marginTop: 12, paddingTop: 12, borderTopWidth: 1, borderTopColor: '#2A2A3E' },
+  statusRow: { flexDirection: 'row', alignItems: 'center' },
+  statusDot: { width: 8, height: 8, borderRadius: 4, marginRight: 8 },
+  statusDotActive: { backgroundColor: '#2ECC71' },
+  statusDotInactive: { backgroundColor: '#7F8C8D' },
+  statusText: { fontSize: 13, fontWeight: '600' },
+  statusTextActive: { color: '#2ECC71' },
+  statusTextInactive: { color: '#888' },
+  lastEventText: { color: '#A5A5C7', fontSize: 12, marginTop: 6 },
+  errorBox: { backgroundColor: '#3B1828', borderRadius: 8, padding: 10, marginTop: 8, borderWidth: 1, borderColor: '#7E2B45' },
+  errorText: { color: '#FF7B90', fontSize: 12, lineHeight: 16 },
 });

@@ -13,6 +13,13 @@ from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
+import sys
+from pathlib import Path
+
+_PARENT_DIR = str(Path(__file__).resolve().parent.parent)
+if _PARENT_DIR not in sys.path:
+    sys.path.insert(0, _PARENT_DIR)
+
 from app.config import settings
 from app.db.init_db import init_db
 from app.ml_registry_shim import run_adapter_registry

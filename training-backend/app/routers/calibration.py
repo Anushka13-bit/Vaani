@@ -50,9 +50,8 @@ router = APIRouter(prefix="/calibration", tags=["calibration"])
 )
 async def get_prompts(
     language: str = Query(default="en", description="BCP-47 language code, e.g. en, ta"),
-    count: int = Query(default=40, ge=1, le=100),
+    count: int = Query(default=5, ge=1, le=100),
     db: AsyncSession = Depends(get_db),
-    _: UserRecord = Depends(get_current_user),
 ) -> PromptSetResponse:
     result = await db.execute(
         select(PromptRecord)

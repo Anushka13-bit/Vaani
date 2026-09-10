@@ -57,7 +57,7 @@ class Settings(BaseSettings):
     AUDIO_RETENTION_DAYS: int = 30
 
     # ── Calibration prompts ───────────────────────────────────────────────────
-    DEFAULT_SAMPLE_COUNT: int = 40
+    DEFAULT_SAMPLE_COUNT: int = 5
 
 
 settings = Settings()

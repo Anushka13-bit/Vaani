@@ -92,6 +92,12 @@ export const SpeechBridge = {
   isWakeWordServiceRunning: (): Promise<boolean> =>
     SpeechModule.isWakeWordServiceRunning(),
 
+  checkVoicePermissions: (): Promise<boolean> =>
+    SpeechModule.checkVoicePermissions(),
+
+  getWakeWordStopReason: (): Promise<string> =>
+    SpeechModule.getWakeWordStopReason(),
+
   onTranscriptSegment: (
     callback: (segment: TranscriptSegment) => void,
   ): EmitterSubscription | null => {
@@ -107,5 +113,25 @@ export const SpeechBridge = {
   ): EmitterSubscription | null => {
     if (!recognitionEvents) return null;
     return recognitionEvents.addListener('onConfirmationRequired', callback);
+  },
+
+  onWakeWordDetected: (
+    callback: (payload: { model: string; score: number }) => void,
+  ): EmitterSubscription | null => {
+    if (!recognitionEvents) {
+      console.warn('[SpeechBridge] RecognitionEventEmitter not available.');
+      return null;
+    }
+    return recognitionEvents.addListener('onWakeWordDetected', callback);
+  },
+
+  onWakeWordError: (
+    callback: (payload: { reason: string }) => void,
+  ): EmitterSubscription | null => {
+    if (!recognitionEvents) {
+      console.warn('[SpeechBridge] RecognitionEventEmitter not available.');
+      return null;
+    }
+    return recognitionEvents.addListener('onWakeWordError', callback);
   },
 };

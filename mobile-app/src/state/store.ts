@@ -3,7 +3,7 @@
  * Combines adapter state and phrasebook state.
  */
 import { create } from 'zustand';
-import type { AdapterHandle, PhrasebookEntry } from '../native/types';
+import type { AdapterHandle, PhrasebookEntry, WakeWordEvent } from '../native/types';
 
 // ── Adapter slice ─────────────────────────────────────────────────────────────
 
@@ -46,9 +46,22 @@ interface SettingsState {
   setCorrectionSyncOptIn: (optIn: boolean) => void;
 }
 
+// ── Wake Word slice ───────────────────────────────────────────────────────────
+
+interface WakeWordState {
+  wakeWordEnabled: boolean;
+  wakeWordListening: boolean;
+  lastWakeWordEvent: WakeWordEvent | null;
+  wakeWordStopReason: string | null;
+  setWakeWordEnabled: (enabled: boolean) => void;
+  setWakeWordListening: (listening: boolean) => void;
+  setLastWakeWordEvent: (event: WakeWordEvent | null) => void;
+  setWakeWordStopReason: (reason: string | null) => void;
+}
+
 // ── Combined store ────────────────────────────────────────────────────────────
 
-type AppStore = AdapterState & PhrasebookState & AuthState & SettingsState;
+type AppStore = AdapterState & PhrasebookState & AuthState & SettingsState & WakeWordState;
 
 export const useStore = create<AppStore>((set) => ({
   // Adapter
@@ -83,4 +96,14 @@ export const useStore = create<AppStore>((set) => ({
   setPreferredLanguage: (lang) => set({ preferredLanguage: lang }),
   setSeverityHint: (hint) => set({ dysarthriaSeverityHint: hint }),
   setCorrectionSyncOptIn: (optIn) => set({ correctionSyncOptIn: optIn }),
+
+  // Wake Word
+  wakeWordEnabled: false,
+  wakeWordListening: false,
+  lastWakeWordEvent: null,
+  wakeWordStopReason: null,
+  setWakeWordEnabled: (wakeWordEnabled) => set({ wakeWordEnabled }),
+  setWakeWordListening: (wakeWordListening) => set({ wakeWordListening }),
+  setLastWakeWordEvent: (lastWakeWordEvent) => set({ lastWakeWordEvent }),
+  setWakeWordStopReason: (wakeWordStopReason) => set({ wakeWordStopReason }),
 }));

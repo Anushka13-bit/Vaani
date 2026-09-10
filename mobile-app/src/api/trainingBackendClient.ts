@@ -74,7 +74,7 @@ class TrainingBackendClient {
   // ── Calibration ─────────────────────────────────────────────────────────────
 
   calibration = {
-    getPrompts: async (language = 'en', count = 40): Promise<PromptSetResponse> => {
+    getPrompts: async (language = 'en', count = 5): Promise<PromptSetResponse> => {
       const { data } = await this.http.get<PromptSetResponse>('/calibration/prompts', {
         params: { language, count },
       });

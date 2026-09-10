@@ -63,7 +63,7 @@ class CalibrationSessionRecord(Base):
     prompt_set_id = Column(String, nullable=False)
     status = Column(String, nullable=False, default="CREATED")
     samples_received = Column(Integer, default=0, nullable=False)
-    samples_required = Column(Integer, default=40, nullable=False)
+    samples_required = Column(Integer, default=5, nullable=False)
     created_at = Column(DateTime(timezone=True), default=_now, nullable=False)
     updated_at = Column(DateTime(timezone=True), default=_now, onupdate=_now, nullable=False)
 

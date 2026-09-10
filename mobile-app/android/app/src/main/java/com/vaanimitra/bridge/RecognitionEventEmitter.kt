@@ -7,13 +7,13 @@ import com.vaanimitra.stt.TranscriptSegment
 import android.util.Log
 
 /**
- * RecognitionEventEmitter — streams transcript/confidence events from native → RN (§2.2).
+ * RecognitionEventEmitter — streams transcript/confidence and wake-word events from native → RN.
  *
- * PersonalizedRecognitionService calls emitTranscriptSegment() as segments arrive.
- * The RN layer subscribes via SpeechBridge.onTranscriptSegment(callback).
- *
- * This implements the ReactContextBaseJavaModule pattern (not RCTEventEmitter)
- * so it can be included in SpeechModulePackage alongside SpeechModule.
+ * Events emitted:
+ *   onTranscriptSegment      — Whisper segment from VoicePipeline (text, confidence, startMs, endMs)
+ *   onConfirmationRequired   — High-stakes intent needs user confirmation
+ *   onWakeWordDetected       — Wake word fired (model name + score)
+ *   onWakeWordError          — Service stopped due to an error (reason string)
  */
 @ReactModule(name = RecognitionEventEmitter.NAME)
 class RecognitionEventEmitter(private val reactContext: ReactApplicationContext) :
@@ -21,11 +21,12 @@ class RecognitionEventEmitter(private val reactContext: ReactApplicationContext)
 
     companion object {
         const val NAME = "RecognitionEventEmitter"
-        const val EVENT_TRANSCRIPT_SEGMENT = "onTranscriptSegment"
+        const val EVENT_TRANSCRIPT_SEGMENT    = "onTranscriptSegment"
         const val EVENT_CONFIRMATION_REQUIRED = "onConfirmationRequired"
+        const val EVENT_WAKE_WORD_DETECTED    = "onWakeWordDetected"
+        const val EVENT_WAKE_WORD_ERROR       = "onWakeWordError"
         private const val TAG = "RecognitionEventEmitter"
 
-        // Singleton so PersonalizedRecognitionService can call emit directly
         @Volatile
         var instance: RecognitionEventEmitter? = null
     }
@@ -43,7 +44,7 @@ class RecognitionEventEmitter(private val reactContext: ReactApplicationContext)
         super.invalidate()
     }
 
-    // ── Emit helpers ──────────────────────────────────────────────────────────
+    // ── Transcript ────────────────────────────────────────────────────────────
 
     fun emitTranscriptSegment(segment: TranscriptSegment) {
         if (!reactContext.hasActiveReactInstance()) return
@@ -66,6 +67,39 @@ class RecognitionEventEmitter(private val reactContext: ReactApplicationContext)
         emit(EVENT_CONFIRMATION_REQUIRED, params)
     }
 
+    // ── Wake word ─────────────────────────────────────────────────────────────
+
+    /**
+     * Fired when the wake word engine triggers (before mic is handed to VoicePipeline).
+     * @param modelName  e.g. "Hey Lily" or "Hey Jarvis"
+     * @param score      Raw detection confidence from openWakeWord (0.0–1.0)
+     */
+    fun emitWakeWordDetected(modelName: String, score: Float) {
+        if (!reactContext.hasActiveReactInstance()) return
+        val params = Arguments.createMap().apply {
+            putString("model", modelName)
+            putDouble("score", score.toDouble())
+        }
+        emit(EVENT_WAKE_WORD_DETECTED, params)
+        Log.i(TAG, "emitWakeWordDetected: model=$modelName score=$score")
+    }
+
+    /**
+     * Fired when the wake-word foreground service self-terminates due to an error
+     * (e.g. missing ONNX model assets, AudioRecord init failure).
+     * @param reason  Human-readable description of why the service stopped.
+     */
+    fun emitWakeWordError(reason: String) {
+        if (!reactContext.hasActiveReactInstance()) return
+        val params = Arguments.createMap().apply {
+            putString("reason", reason)
+        }
+        emit(EVENT_WAKE_WORD_ERROR, params)
+        Log.e(TAG, "emitWakeWordError: $reason")
+    }
+
+    // ── Internal emit helper ──────────────────────────────────────────────────
+
     private fun emit(eventName: String, params: WritableMap) {
         reactContext
             .getJSModule(DeviceEventManagerModule.RCTDeviceEventEmitter::class.java)
@@ -76,11 +110,11 @@ class RecognitionEventEmitter(private val reactContext: ReactApplicationContext)
 
     @ReactMethod
     fun addListener(@Suppress("UNUSED_PARAMETER") eventName: String) {
-        // Required for RN NativeEventEmitter — no-op
+        // Required boilerplate for RN NativeEventEmitter — no-op
     }
 
     @ReactMethod
     fun removeListeners(@Suppress("UNUSED_PARAMETER") count: Int) {
-        // Required for RN NativeEventEmitter — no-op
+        // Required boilerplate for RN NativeEventEmitter — no-op
     }
 }
