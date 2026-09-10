@@ -31,8 +31,9 @@
     <!-- SYSTEM_ALERT_WINDOW — for native overlay on low-confidence (flagged as build risk §9) -->
     <!-- <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" /> -->
 
-    <!-- FOREGROUND_SERVICE — if background audio capture is ever needed -->
-    <!-- <uses-permission android:name="android.permission.FOREGROUND_SERVICE" /> -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:name=".MainApplication"
@@ -91,6 +92,17 @@
             Per spec §7: this service only reads/acts on UI view hierarchy.
             It does NOT access audio, camera, or screen pixels.
         -->
+        <!-- Wake word foreground listener (openWakeWord ONNX — "Hey Lily") -->
+        <service
+            android:name=".wakeword.WakeWordForegroundService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
+        <activity
+            android:name=".ui.ClarificationActivity"
+            android:exported="false"
+            android:theme="@android:style/Theme.DeviceDefault.Dialog" />
+
         <service
             android:name=".actions.AccessibilityActionService"
             android:label="VaaniMitra Accessibility"

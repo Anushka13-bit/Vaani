@@ -27,7 +27,7 @@ export async function downloadAndLoadClusterAdapter(
 ): Promise<AdapterHandle> {
   const cluster = await backendClient.adapters.getClusterAdapter(language, severity);
   const handle = await SpeechBridge.downloadAndLoadClusterAdapter(
-    resolveDownloadUrl(cluster.download_url),
+    resolveDownloadUrl(backendClient.adapters.getMobileBundleUrl(cluster.adapter_id)),
     getAuthToken(),
     language,
     cluster.adapter_id,

@@ -128,6 +128,9 @@ class TrainingBackendClient {
     getDownloadUrl: (adapterId: string): string =>
       `${BASE_URL}/adapters/${adapterId}/download`,
 
+    getMobileBundleUrl: (adapterId: string): string =>
+      `${BASE_URL}/adapters/${adapterId}/mobile`,
+
     getClusterAdapter: async (language: string, severity?: string): Promise<ClusterAdapterResponse> => {
       const { data } = await this.http.get<ClusterAdapterResponse>('/adapters/clusters', {
         params: { language, ...(severity ? { severity } : {}) },

@@ -23,6 +23,7 @@ export default function SettingsScreen({ navigation }: any) {
   } = useStore();
 
   const [accessibilityEnabled, setAccessibilityEnabled] = useState(false);
+  const [wakeWordEnabled, setWakeWordEnabled] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
   const refreshAdapters = useCallback(async () => {
@@ -45,7 +46,21 @@ export default function SettingsScreen({ navigation }: any) {
       .then(setAccessibilityEnabled)
       .catch(() => {});
     refreshAdapters();
+    SpeechBridge.isWakeWordServiceRunning().then(setWakeWordEnabled).catch(() => {});
   }, [refreshAdapters]);
+
+  const toggleWakeWord = async (enable: boolean) => {
+    try {
+      if (enable) {
+        await SpeechBridge.startWakeWordService();
+      } else {
+        await SpeechBridge.stopWakeWordService();
+      }
+      setWakeWordEnabled(enable);
+    } catch (e: any) {
+      Alert.alert('Wake word error', e?.message ?? 'Could not toggle Hey Lily listener');
+    }
+  };
 
   const reloadAdapter = async () => {
     try {
@@ -115,20 +130,29 @@ export default function SettingsScreen({ navigation }: any) {
         ))
       )}
 
+      <SectionHeader title="Hey Lily (Wake Word)" />
+      <View style={styles.row}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.rowLabel}>Listen for &quot;Hey Lily&quot;</Text>
+          <Text style={styles.rowSub}>
+            Hands-free commands via foreground service (vibrate on wake). Until hey_lily.onnx
+            is trained, dev builds use &quot;Hey Jarvis&quot; as the wake phrase.
+          </Text>
+        </View>
+        <Switch
+          value={wakeWordEnabled}
+          onValueChange={toggleWakeWord}
+          trackColor={{ true: '#6C63FF' }}
+        />
+      </View>
+
       <SectionHeader title="Voice Activation" />
       <View style={styles.card}>
         <Text style={styles.cardSub}>
-          VaaniMitra works <Text style={styles.bold}>outside the app</Text> once configured.
-          It is <Text style={styles.bold}>not</Text> a &quot;Hey Siri&quot; always-listening assistant.
+          <Text style={styles.bold}>Primary:</Text> Say &quot;Hey Lily&quot;, then your command (e.g. call Ravi).
         </Text>
         <Text style={[styles.cardSub, { marginTop: 10 }]}>
-          1. Set VaaniMitra as your default voice input (mic button in any app).
-        </Text>
-        <Text style={styles.cardSub}>
-          2. Tap the mic in Messages, Chrome, etc. and speak commands like &quot;call Ravi&quot;.
-        </Text>
-        <Text style={styles.cardSub}>
-          3. Optional: add shortcuts in Phrasebook for custom phrases.
+          <Text style={styles.bold}>Fallback:</Text> Set VaaniMitra as system voice input and use the keyboard mic.
         </Text>
         <TouchableOpacity
           style={styles.btn}

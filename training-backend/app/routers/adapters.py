@@ -163,6 +163,39 @@ async def download_adapter(
     )
 
 
+# ── GET /adapters/{adapter_id}/mobile ───────────────────────────────────────
+
+@router.get(
+    "/adapters/{adapter_id}/mobile",
+    summary="Download mobile ONNX bundle (merged LoRA Whisper for on-device inference)",
+    response_class=FileResponse,
+)
+async def download_mobile_bundle(
+    adapter_id: str,
+    db: AsyncSession = Depends(get_db),
+    _: UserRecord = Depends(get_current_user),
+) -> FileResponse:
+    """
+    Serves mobile_bundle.zip from ml/mobile_export/{adapter_id}/.
+    Generate with: python ml/export_whisper_mobile.py --adapter-dir ml/adapters/{adapter_id} --quantize
+    """
+    bundle = settings.MOBILE_EXPORT_DIR / adapter_id / "mobile_bundle.zip"
+    if not bundle.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=(
+                f"Mobile ONNX bundle not found for '{adapter_id}'. "
+                f"Run: python ml/export_whisper_mobile.py "
+                f"--adapter-dir ml/adapters/{adapter_id} --quantize"
+            ),
+        )
+    return FileResponse(
+        path=str(bundle),
+        media_type="application/zip",
+        filename=f"{adapter_id}_mobile_bundle.zip",
+    )
+
+
 # ── GET /users/{user_id}/adapter ─────────────────────────────────────────────
 
 @router.get(

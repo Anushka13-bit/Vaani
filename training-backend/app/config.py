@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Path that adapter_registry.py scans for static seed adapters.
     ADAPTERS_DIR: Path = Path(__file__).parent.parent / "ml" / "adapters"
 
+    # ONNX mobile bundles produced by ml/export_whisper_mobile.py
+    MOBILE_EXPORT_DIR: Path = Path(__file__).parent.parent / "ml" / "mobile_export"
+
     # Whisper base model identifier (used in adapter records).
     # Must match the model your LoRA adapters were trained against.
     WHISPER_BASE_MODEL: str = "openai/whisper-small"

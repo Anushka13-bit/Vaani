@@ -68,6 +68,15 @@ export const SpeechBridge = {
   openVoiceInputSettings: (): Promise<boolean> =>
     SpeechModule.openVoiceInputSettings(),
 
+  startWakeWordService: (): Promise<boolean> =>
+    SpeechModule.startWakeWordService(),
+
+  stopWakeWordService: (): Promise<boolean> =>
+    SpeechModule.stopWakeWordService(),
+
+  isWakeWordServiceRunning: (): Promise<boolean> =>
+    SpeechModule.isWakeWordServiceRunning(),
+
   onTranscriptSegment: (
     callback: (segment: TranscriptSegment) => void,
   ): EmitterSubscription | null => {

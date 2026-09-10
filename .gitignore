@@ -17,6 +17,9 @@ training-backend/**/__pycache__/
 training-backend/**/*.pyc
 training-backend/.env
 training-backend/.env.local
+training-backend/.venv-export/
+training-backend/venv/
+training-backend/ml/mobile_export/
 
 # ── Node / React Native ───────────────────────────────────────────────────────
 mobile-app/node_modules/
@@ -31,6 +34,7 @@ mobile-app/ios/build/
 mobile-app/*.jks
 mobile-app/**/*.jks
 mobile-app/android/app/google-services.json
+mobile-app/android/app/src/main/assets/*.onnx
 
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store

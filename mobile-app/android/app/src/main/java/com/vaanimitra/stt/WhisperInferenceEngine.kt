@@ -6,87 +6,70 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * WhisperInferenceEngine — wraps ONNX Runtime Mobile / whisper.cpp for on-device STT.
- *
- * STUB implementation: returns a deterministic mock result so the RN bridge and
- * PersonalizedRecognitionService can be tested end-to-end before the ONNX model
- * is integrated.
- *
- * TODO: Replace stub body with real ONNX Runtime inference:
- *   1. Add onnxruntime-android dependency to build.gradle
- *   2. Copy whisper-small.onnx to assets/
- *   3. Call OrtEnvironment.getEnvironment().createSession(...)
- *   4. Pre-process pcmAudio → log-mel spectrogram
- *   5. Run encoder → decoder with greedy/beam decode
- *   6. Apply LoRA adapter weights via AdapterManager before inference
- *
- * See: https://github.com/microsoft/onnxruntime  (mobile runtime)
- *      https://github.com/ggerganov/whisper.cpp   (alternative C++ path via JNI)
+ * On-device Whisper STT with merged TORGO LoRA ONNX (NNAPI → CPU fallback).
  */
 class WhisperInferenceEngine(private val context: Context) : SttEngine {
 
     companion object {
         private const val TAG = "WhisperInferenceEngine"
-        // Model asset path. Copy whisper-small.onnx here before enabling real inference.
-        private const val MODEL_ASSET = "whisper-small.onnx"
     }
 
-    // Reference to the currently loaded LoRA adapter (set by AdapterManager)
     @Volatile
     var activeAdapterPath: String? = null
 
-    fun isOnnxModelAvailable(): Boolean {
-        return try {
-            context.assets.open(MODEL_ASSET).close()
-            true
-        } catch (_: Exception) {
-            false
-        }
-    }
+    @Volatile
+    var activeAdapterId: String = "torgo_cluster_english_v1"
 
-    /**
-     * STUB — returns a mock TranscriptionResult.
-     * Replace this implementation with real ONNX Runtime inference (see TODO above).
-     */
+    @Volatile
+    var executionProvider: String = "none"
+
+    fun isModelReady(): Boolean =
+        ModelBundleManager.isBundleReady(context, activeAdapterId)
+
+    fun isOnnxModelAvailable(): Boolean = isModelReady()
+
     override suspend fun transcribe(
         pcmAudio: ShortArray,
         sampleRate: Int,
     ): TranscriptionResult = withContext(Dispatchers.Default) {
-        Log.d(TAG, "transcribe() called — STUB. samples=${pcmAudio.size}, adapter=$activeAdapterPath")
+        if (sampleRate != MelSpectrogram.SAMPLE_RATE) {
+            Log.w(TAG, "Unexpected sample rate $sampleRate — expected 16000")
+        }
 
-        // Simulate inference delay
-        kotlinx.coroutines.delay(300)
+        if (!isModelReady()) {
+            Log.e(TAG, "Mobile ONNX bundle not ready for $activeAdapterId")
+            throw IllegalStateException("Mobile ONNX bundle not downloaded. Complete calibration first.")
+        }
 
-        // STUB result — replace with real decoder output
-        val mockText = "[STUB] Hello, this is a mock transcription result."
+        val runtime = OnnxWhisperRuntime(context, activeAdapterId)
+        val decoded = runtime.transcribe(pcmAudio)
+            ?: throw IllegalStateException("ONNX inference failed")
+
+        executionProvider = decoded.executionProvider
+        activeAdapterPath = ModelBundleManager.bundleDir(context, activeAdapterId).absolutePath
+
+        Log.i(TAG, "ONNX transcribe EP=${decoded.executionProvider} adapter=$activeAdapterId " +
+            "logProb=${decoded.avgLogProb} text='${decoded.text.take(40)}'")
+
+        val confidence = expProb(decoded.avgLogProb)
         TranscriptionResult(
-            text = mockText,
+            text = decoded.text,
             languageDetected = "en",
             segments = listOf(
                 TranscriptSegment(
-                    text = mockText,
-                    startMs = 0L,
-                    endMs = (pcmAudio.size.toLong() * 1000L / sampleRate),
-                    confidence = 0.85f,
-                )
+                    text = decoded.text,
+                    startMs = 0,
+                    endMs = pcmAudio.size.toLong() * 1000 / sampleRate,
+                    confidence = confidence,
+                ),
             ),
+            avgLogProb = decoded.avgLogProb,
+            executionProvider = decoded.executionProvider,
         )
     }
 
-    // ── TODO: Real implementation outline ────────────────────────────────────
-    //
-    // private lateinit var ortSession: OrtSession
-    //
-    // fun loadModel() {
-    //     val env = OrtEnvironment.getEnvironment()
-    //     val modelBytes = context.assets.open(MODEL_ASSET).readBytes()
-    //     ortSession = env.createSession(modelBytes, OrtSession.SessionOptions())
-    //     Log.i(TAG, "Whisper model loaded from assets/$MODEL_ASSET")
-    // }
-    //
-    // private fun pcmToLogMel(pcm: ShortArray): FloatArray { /* mel spectrogram */ }
-    // private fun runEncoder(mel: FloatArray): OnnxTensor { /* ... */ }
-    // private fun runDecoder(encoderOut: OnnxTensor): List<Int> { /* greedy decode */ }
-    // private fun decodeTokens(tokens: List<Int>): String { /* BPE decode */ }
-    // ─────────────────────────────────────────────────────────────────────────
+    private fun expProb(logProb: Float): Float {
+        if (logProb <= -10f) return 0.1f
+        return kotlin.math.exp(logProb.coerceIn(-10f, 0f)).coerceIn(0f, 1f)
+    }
 }

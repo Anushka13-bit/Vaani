@@ -76,6 +76,15 @@ export default function App() {
         const phrasebook = await LocalDb.loadPhrasebook();
         setEntries(phrasebook);
         await syncPhrasebookToNative(phrasebook);
+
+        // Start "Hey Lily" wake-word listener if adapters are ready
+        try {
+          const { SpeechBridge } = await import('./native/SpeechBridge');
+          const running = await SpeechBridge.isWakeWordServiceRunning();
+          if (!running) await SpeechBridge.startWakeWordService();
+        } catch (e) {
+          console.warn('[App] Wake word service not started:', e);
+        }
       } catch (e) {
         console.error('[App] Bootstrap failed:', e);
       } finally {

@@ -5,11 +5,15 @@ import com.facebook.react.module.annotations.ReactModule
 import com.vaanimitra.VaaniMitraComponents
 import com.vaanimitra.nlu.PhrasebookSync
 import com.vaanimitra.stt.AdapterDownloader
+import com.vaanimitra.stt.ModelBundleManager
+import com.vaanimitra.stt.OnnxRuntimeHolder
+import com.vaanimitra.wakeword.WakeWordForegroundService
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
-import android.content.Intent
-import android.provider.Settings
 import android.util.Log
 import org.json.JSONObject
 
@@ -65,7 +69,7 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
 
     @ReactMethod
     fun downloadAndLoadClusterAdapter(
-        downloadUrl: String,
+        mobileBundleUrl: String,
         authToken: String,
         languageCode: String,
         serverAdapterId: String,
@@ -74,22 +78,67 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     ) {
         scope.launch(Dispatchers.IO) {
             try {
-                val bytes = AdapterDownloader.downloadBytes(downloadUrl, authToken)
-                adapterManager.saveLanguageAdapterBytes(languageCode, bytes)
+                val bytes = AdapterDownloader.downloadBytes(mobileBundleUrl, authToken)
+                val bundleDir = ModelBundleManager.bundleDir(reactContext, serverAdapterId)
+                val manifest = ModelBundleManager.extractZip(bytes, bundleDir)
+
                 adapterManager.persistActiveConfig(
                     languageCode = languageCode,
                     clusterAdapterId = serverAdapterId,
                     clusterVersion = version,
                 )
                 val handle = adapterManager.loadLanguageAdapter(languageCode, serverAdapterId)
-                whisperEngine.activeAdapterPath = handle.filePath
-                promise.resolve(adapterHandleToMap(handle))
-                Log.i(TAG, "Cluster adapter loaded: $serverAdapterId")
+                whisperEngine.activeAdapterId = serverAdapterId
+                whisperEngine.activeAdapterPath = bundleDir.absolutePath
+                OnnxRuntimeHolder.release()
+
+                val map = adapterHandleToMap(handle).apply {
+                    putString("executionProvider", whisperEngine.executionProvider)
+                    putString("bundlePath", bundleDir.absolutePath)
+                    putBoolean("mergedLora", manifest.mergedLora)
+                }
+                promise.resolve(map)
+                Log.i(TAG, "Mobile ONNX bundle loaded: $serverAdapterId")
             } catch (e: Exception) {
                 Log.e(TAG, "downloadAndLoadClusterAdapter failed: ${e.message}")
                 promise.reject("ADAPTER_DOWNLOAD_FAILED", e.message, e)
             }
         }
+    }
+
+    @ReactMethod
+    fun startWakeWordService(promise: Promise) {
+        try {
+            val intent = Intent(reactContext, WakeWordForegroundService::class.java).apply {
+                action = WakeWordForegroundService.ACTION_START
+            }
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                reactContext.startForegroundService(intent)
+            } else {
+                reactContext.startService(intent)
+            }
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("WAKE_WORD_START_FAILED", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun stopWakeWordService(promise: Promise) {
+        try {
+            val intent = Intent(reactContext, WakeWordForegroundService::class.java).apply {
+                action = WakeWordForegroundService.ACTION_STOP
+            }
+            reactContext.startService(intent)
+            promise.resolve(true)
+        } catch (e: Exception) {
+            promise.reject("WAKE_WORD_STOP_FAILED", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun isWakeWordServiceRunning(promise: Promise) {
+        promise.resolve(WakeWordForegroundService.isRunning)
     }
 
     @ReactMethod

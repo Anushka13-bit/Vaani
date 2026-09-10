@@ -6,8 +6,10 @@ package com.vaanimitra.stt
 
 data class TranscriptionResult(
     val text: String,
-    val languageDetected: String,           // e.g. "en", "ta", "ta-en"
+    val languageDetected: String,
     val segments: List<TranscriptSegment>,
+    val avgLogProb: Float? = null,
+    val executionProvider: String = "CPU",
 )
 
 data class TranscriptSegment(
