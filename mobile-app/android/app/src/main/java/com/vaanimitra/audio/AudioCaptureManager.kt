@@ -23,6 +23,48 @@ class AudioCaptureManager {
         const val SAMPLE_RATE = 16_000        // Hz — Whisper requirement
         const val CHANNEL = AudioFormat.CHANNEL_IN_MONO
         const val ENCODING = AudioFormat.ENCODING_PCM_16BIT
+
+        /**
+         * Write 16kHz mono 16-bit PCM bytes to a standard 44-byte RIFF/WAVE file.
+         */
+        fun writeWavFile(pcmBytes: ByteArray, destFile: File) {
+            val totalDataLen = pcmBytes.size + 36
+            val byteRate = SAMPLE_RATE * 1 * 2 // 16000 * channels * bytesPerSample = 32000
+
+            java.io.FileOutputStream(destFile).use { out ->
+                // RIFF chunk descriptor
+                out.write("RIFF".toByteArray())
+                out.write(intToByteArray(totalDataLen))
+                out.write("WAVE".toByteArray())
+
+                // "fmt " sub-chunk
+                out.write("fmt ".toByteArray())
+                out.write(intToByteArray(16))               // Subchunk1Size = 16 for PCM
+                out.write(shortToByteArray(1))              // AudioFormat = 1 (PCM)
+                out.write(shortToByteArray(1))              // NumChannels = 1 (mono)
+                out.write(intToByteArray(SAMPLE_RATE))     // SampleRate = 16000
+                out.write(intToByteArray(byteRate))        // ByteRate = 32000
+                out.write(shortToByteArray(2))              // BlockAlign = channels * bytesPerSample = 2
+                out.write(shortToByteArray(16))             // BitsPerSample = 16
+
+                // "data" sub-chunk
+                out.write("data".toByteArray())
+                out.write(intToByteArray(pcmBytes.size))
+                out.write(pcmBytes)
+            }
+        }
+
+        private fun intToByteArray(value: Int): ByteArray = byteArrayOf(
+            (value and 0xFF).toByte(),
+            ((value shr 8) and 0xFF).toByte(),
+            ((value shr 16) and 0xFF).toByte(),
+            ((value shr 24) and 0xFF).toByte(),
+        )
+
+        private fun shortToByteArray(value: Int): ByteArray = byteArrayOf(
+            (value and 0xFF).toByte(),
+            ((value shr 8) and 0xFF).toByte(),
+        )
     }
 
     private var audioRecord: AudioRecord? = null
@@ -102,6 +144,78 @@ class AudioCaptureManager {
             audioRecord = null
         }
     }
+
+    private val calibrationPcmBuffer = java.io.ByteArrayOutputStream()
+    @Volatile
+    private var isCalibrationRecording = false
+    private var calibrationRecordThread: Thread? = null
+
+    /**
+     * Start capturing 16kHz mono 16-bit PCM directly from AudioRecord into memory.
+     */
+    @SuppressLint("MissingPermission")
+    fun startCalibrationRecording() {
+        if (isCalibrationRecording) return
+        val bufferSize = AudioRecord.getMinBufferSize(SAMPLE_RATE, CHANNEL, ENCODING)
+            .coerceAtLeast(SAMPLE_RATE * 2)
+
+        val record = AudioRecord(
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
+            SAMPLE_RATE,
+            CHANNEL,
+            ENCODING,
+            bufferSize,
+        )
+        audioRecord = record
+        calibrationPcmBuffer.reset()
+        isCalibrationRecording = true
+        record.startRecording()
+        Log.d(TAG, "Calibration recording started at ${SAMPLE_RATE}Hz mono 16-bit PCM")
+
+        calibrationRecordThread = Thread {
+            val chunk = ByteArray(bufferSize)
+            try {
+                while (isCalibrationRecording) {
+                    val read = record.read(chunk, 0, chunk.size)
+                    if (read > 0) {
+                        synchronized(calibrationPcmBuffer) {
+                            calibrationPcmBuffer.write(chunk, 0, read)
+                        }
+                    }
+                }
+            } catch (e: Exception) {
+                Log.e(TAG, "Error in calibration record thread: ${e.message}")
+            } finally {
+                try {
+                    record.stop()
+                    record.release()
+                } catch (_: Exception) {}
+            }
+        }.also { it.start() }
+    }
+
+    /**
+     * Stop capturing and save the recorded 16kHz mono 16-bit PCM audio directly to a standard WAV file.
+     * App-private destination file should be: files/calibration/{session_id}/phrase_{NN}.wav
+     */
+    fun stopCalibrationRecordingAndSaveWav(destFile: File): Long {
+        isCalibrationRecording = false
+        try {
+            calibrationRecordThread?.join(2000)
+        } catch (_: Exception) {}
+        calibrationRecordThread = null
+        audioRecord = null
+
+        val pcmBytes = synchronized(calibrationPcmBuffer) {
+            calibrationPcmBuffer.toByteArray()
+        }
+        destFile.parentFile?.mkdirs()
+        writeWavFile(pcmBytes, destFile)
+        Log.i(TAG, "Saved 16kHz mono 16-bit PCM calibration clip: ${destFile.absolutePath} (${pcmBytes.size} bytes)")
+        return destFile.length()
+    }
+
+    fun isCalibrationRecordingActive(): Boolean = isCalibrationRecording
 
     fun stopStreaming() {
         isCapturing = false

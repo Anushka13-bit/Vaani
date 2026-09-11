@@ -102,6 +102,10 @@ app.include_router(adapters.router, prefix=PREFIX)
 app.include_router(corrections.router, prefix=PREFIX)
 app.include_router(caregiver.router, prefix=PREFIX)
 
+# Direct endpoints without /v1 prefix (§5 calibration pipeline compatibility)
+app.include_router(calibrate.router)
+app.include_router(session_adapter.router)
+
 
 # ── Global exception handler (§5.6 error format) ─────────────────────────────
 

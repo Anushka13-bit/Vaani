@@ -71,6 +71,18 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
         stackedAdapters.removeAll { it.adapterId == adapterId }
         stackedAdapters.add(handle)
         Log.i(TAG, "Loaded ONNX ${type.name} adapter: $adapterId")
+
+        // Actively bind new adapter to WhisperInferenceEngine and release old ONNX sessions
+        try {
+            val engine = com.vaanimitra.VaaniMitraComponents.whisperEngine(context)
+            engine.activeAdapterId = adapterId
+            engine.activeAdapterPath = bundleDir.absolutePath
+            OnnxRuntimeHolder.release()
+            Log.i(TAG, "Activated ONNX adapter $adapterId in WhisperInferenceEngine")
+        } catch (e: Exception) {
+            Log.w(TAG, "Could not notify WhisperInferenceEngine of adapter switch: ${e.message}")
+        }
+
         return handle
     }
 

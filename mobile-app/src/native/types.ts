@@ -90,3 +90,24 @@ export interface WakeWordEvent {
   timestamp: number;
 }
 
+// ── Calibration ───────────────────────────────────────────────────────────────
+
+export interface CalibrationRecordResult {
+  sessionId: string;
+  phraseIndex: number;
+  fileName: string;
+  filePath: string;
+  fileSize: number;
+  promptText: string;
+  manifestPath: string;
+}
+
+export interface CalibrationFilesInfo {
+  sessionId: string;
+  clips: Array<{ name: string; path: string; size: number }>;
+  clipCount: number;
+  hasManifest: boolean;
+  manifestPath: string;
+}
+
+

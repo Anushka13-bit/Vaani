@@ -8,11 +8,15 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import shutil
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+
+# Ensure unsupported MPS operations fall back to CPU instead of crashing on Mac Apple Silicon
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 from app.config import settings
 from app.services.session_status import write_status
@@ -76,6 +80,20 @@ def _load_calibration_pairs(session_id: str) -> list[tuple[Path, str]]:
                 raise ValueError(f"Audio file too small / likely corrupt: {p.name}")
             pairs.append((p, s.prompt_text))
         if len(pairs) < 3:
+            # Fallback: check ./sessions/{session_id}/manifest.json
+            manifest_file = settings.SESSIONS_DIR / session_id / "manifest.json"
+            if manifest_file.is_file():
+                try:
+                    data = json.loads(manifest_file.read_text())
+                    mapping = data.get("mapping", data) if isinstance(data, dict) else {}
+                    for wav_file in (settings.SESSIONS_DIR / session_id).glob("*.wav"):
+                        txt = mapping.get(wav_file.name) or mapping.get(wav_file.stem)
+                        if txt and wav_file.stat().st_size >= 500:
+                            pairs.append((wav_file, str(txt).strip()))
+                except Exception as ex:
+                    logger.warning("Failed reading session manifest fallback: %s", ex)
+
+        if len(pairs) < 3:
             raise ValueError(
                 f"Need at least 3 calibration samples to fine-tune; got {len(pairs)}"
             )
@@ -101,6 +119,9 @@ def _train_user_lora(
         WhisperProcessor,
     )
 
+    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    logger.info("Using device for fine-tuning: %s", device)
+
     logger.info("Loading base Whisper + merging cluster adapter from %s", warm_start_dir)
     base = WhisperForConditionalGeneration.from_pretrained(base_model)
     merged_cluster = PeftModel.from_pretrained(base, str(warm_start_dir))
@@ -119,8 +140,9 @@ def _train_user_lora(
         bias="none",
     )
     model = get_peft_model(model, lora_config)
+    model.to(device)
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.info("Trainable parameters: %s", trainable)
+    logger.info("Trainable parameters: %s on device: %s", trainable, device)
 
     processor = WhisperProcessor.from_pretrained(base_model)
 

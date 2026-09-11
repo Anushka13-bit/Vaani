@@ -34,11 +34,117 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     private val adapterManager by lazy { VaaniMitraComponents.adapterManager(reactContext) }
     private val whisperEngine by lazy { VaaniMitraComponents.whisperEngine(reactContext) }
     private val phrasebookMatcher by lazy { VaaniMitraComponents.phrasebookMatcher() }
+    private val audioCaptureManager by lazy { VaaniMitraComponents.audioCaptureManager() }
     private val scope = CoroutineScope(Dispatchers.Main)
 
     @ReactMethod
     fun ping(promise: Promise) {
         promise.resolve("pong")
+    }
+
+    @ReactMethod
+    fun startCalibrationRecording(
+        sessionId: String,
+        phraseIndex: Int,
+        promptText: String,
+        promise: Promise,
+    ) {
+        try {
+            if (!PermissionHelper.hasVoicePermissions(reactContext)) {
+                promise.reject("PERMISSION_DENIED", "Microphone permission required for calibration")
+                return
+            }
+            audioCaptureManager.startCalibrationRecording()
+            promise.resolve(true)
+        } catch (e: Exception) {
+            Log.e(TAG, "startCalibrationRecording error: ${e.message}")
+            promise.reject("CALIBRATION_RECORD_START_FAILED", e.message, e)
+        }
+    }
+
+    @ReactMethod
+    fun stopCalibrationRecording(
+        sessionId: String,
+        phraseIndex: Int,
+        promptText: String,
+        promise: Promise,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val phraseFile = com.vaanimitra.audio.CalibrationStorageManager.getPhraseFile(
+                    reactContext, sessionId, phraseIndex
+                )
+                val bytesSaved = audioCaptureManager.stopCalibrationRecordingAndSaveWav(phraseFile)
+                com.vaanimitra.audio.CalibrationStorageManager.updateManifest(
+                    reactContext, sessionId, phraseFile.name, promptText
+                )
+
+                val manifestFile = com.vaanimitra.audio.CalibrationStorageManager.getManifestFile(
+                    reactContext, sessionId
+                )
+                val map = Arguments.createMap().apply {
+                    putString("sessionId", sessionId)
+                    putInt("phraseIndex", phraseIndex)
+                    putString("fileName", phraseFile.name)
+                    putString("filePath", phraseFile.absolutePath)
+                    putDouble("fileSize", bytesSaved.toDouble())
+                    putString("promptText", promptText)
+                    putString("manifestPath", manifestFile.absolutePath)
+                }
+                promise.resolve(map)
+            } catch (e: Exception) {
+                Log.e(TAG, "stopCalibrationRecording error: ${e.message}")
+                promise.reject("CALIBRATION_RECORD_STOP_FAILED", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun uploadCalibrationBatch(
+        sessionId: String,
+        baseUrl: String,
+        authToken: String,
+        promise: Promise,
+    ) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val responseJson = com.vaanimitra.audio.CalibrationStorageManager.uploadBatch(
+                    reactContext, sessionId, baseUrl, authToken
+                )
+                promise.resolve(responseJson)
+            } catch (e: Exception) {
+                Log.e(TAG, "uploadCalibrationBatch error: ${e.message}")
+                promise.reject("CALIBRATION_BATCH_UPLOAD_FAILED", e.message, e)
+            }
+        }
+    }
+
+    @ReactMethod
+    fun getCalibrationSessionFiles(sessionId: String, promise: Promise) {
+        scope.launch(Dispatchers.IO) {
+            try {
+                val clips = com.vaanimitra.audio.CalibrationStorageManager.getSessionClips(reactContext, sessionId)
+                val manifestFile = com.vaanimitra.audio.CalibrationStorageManager.getManifestFile(reactContext, sessionId)
+                val array = Arguments.createArray()
+                clips.forEach { file ->
+                    array.pushMap(Arguments.createMap().apply {
+                        putString("name", file.name)
+                        putString("path", file.absolutePath)
+                        putDouble("size", file.length().toDouble())
+                    })
+                }
+                val map = Arguments.createMap().apply {
+                    putString("sessionId", sessionId)
+                    putArray("clips", array)
+                    putInt("clipCount", clips.size)
+                    putBoolean("hasManifest", manifestFile.exists())
+                    putString("manifestPath", manifestFile.absolutePath)
+                }
+                promise.resolve(map)
+            } catch (e: Exception) {
+                promise.reject("GET_CALIBRATION_FILES_FAILED", e.message, e)
+            }
+        }
     }
 
     @ReactMethod

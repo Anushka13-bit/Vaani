@@ -98,6 +98,46 @@ export const SpeechBridge = {
   getWakeWordStopReason: (): Promise<string> =>
     SpeechModule.getWakeWordStopReason(),
 
+  startCalibrationRecording: (
+    sessionId: string,
+    phraseIndex: number,
+    promptText: string,
+  ): Promise<boolean> =>
+    SpeechModule.startCalibrationRecording(sessionId, phraseIndex, promptText),
+
+  stopCalibrationRecording: (
+    sessionId: string,
+    phraseIndex: number,
+    promptText: string,
+  ): Promise<{
+    sessionId: string;
+    phraseIndex: number;
+    fileName: string;
+    filePath: string;
+    fileSize: number;
+    promptText: string;
+    manifestPath: string;
+  }> =>
+    SpeechModule.stopCalibrationRecording(sessionId, phraseIndex, promptText),
+
+  uploadCalibrationBatch: (
+    sessionId: string,
+    baseUrl: string,
+    authToken = '',
+  ): Promise<string> =>
+    SpeechModule.uploadCalibrationBatch(sessionId, baseUrl, authToken),
+
+  getCalibrationSessionFiles: (
+    sessionId: string,
+  ): Promise<{
+    sessionId: string;
+    clips: Array<{ name: string; path: string; size: number }>;
+    clipCount: number;
+    hasManifest: boolean;
+    manifestPath: string;
+  }> =>
+    SpeechModule.getCalibrationSessionFiles(sessionId),
+
   onTranscriptSegment: (
     callback: (segment: TranscriptSegment) => void,
   ): EmitterSubscription | null => {

@@ -74,9 +74,33 @@ class TrainingBackendClient {
   // ── Calibration ─────────────────────────────────────────────────────────────
 
   calibration = {
-    getPrompts: async (language = 'en', count = 5): Promise<PromptSetResponse> => {
+    getBaseUrl: (): string => BASE_URL,
+
+    getPrompts: async (language = 'en', count = 40): Promise<PromptSetResponse> => {
       const { data } = await this.http.get<PromptSetResponse>('/calibration/prompts', {
         params: { language, count },
+      });
+      return data;
+    },
+
+    uploadBatch: async (
+      sessionId: string,
+      manifestJson: string,
+      files: Array<{ uri: string; name: string; type?: string }>,
+    ): Promise<any> => {
+      const form = new FormData();
+      form.append('session_id', sessionId);
+      form.append('manifest_json', manifestJson);
+      for (const file of files) {
+        form.append('files', {
+          uri: file.uri,
+          name: file.name,
+          type: file.type || 'audio/wav',
+        } as any);
+      }
+      const { data } = await this.http.post('/calibrate', form, {
+        headers: { 'Content-Type': 'multipart/form-data' },
+        timeout: 120_000,
       });
       return data;
     },

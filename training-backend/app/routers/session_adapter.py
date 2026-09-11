@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import FileResponse
 
 from app.config import settings
-from app.deps import get_current_user
+from app.deps import get_current_user_optional
 from app.models.db_models import UserRecord
 from app.models.pydantic_models import SessionAdapterStatusResponse
 from app.services.session_status import read_status
@@ -25,7 +25,7 @@ router = APIRouter(prefix="/adapter", tags=["session-adapter"])
 )
 async def get_session_adapter_status(
     session_id: str,
-    _: UserRecord = Depends(get_current_user),
+    _: UserRecord | None = Depends(get_current_user_optional),
 ) -> SessionAdapterStatusResponse:
     data = read_status(session_id)
     if data is None:
@@ -60,7 +60,7 @@ async def get_session_adapter_status(
 )
 async def download_session_adapter(
     session_id: str,
-    _: UserRecord = Depends(get_current_user),
+    _: UserRecord | None = Depends(get_current_user_optional),
 ) -> FileResponse:
     data = read_status(session_id)
     if data is None or data.get("status") != "ready":

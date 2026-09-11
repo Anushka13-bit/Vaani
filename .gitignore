@@ -8,7 +8,8 @@ training-backend/ml/adapters/**/*.bin
 training-backend/ml/adapters/**/*.safetensors
 *.bin
 *.safetensors
-
+*.venv
+*.venv_win
 # ── Runtime / generated ───────────────────────────────────────────────────────
 training-backend/vaanimitra.db
 training-backend/storage_data/
@@ -19,6 +20,7 @@ training-backend/.env
 training-backend/.env.local
 training-backend/.venv-export/
 training-backend/venv/
+training-backend/venv_win/
 training-backend/ml/mobile_export/
 training-backend/sessions/
 

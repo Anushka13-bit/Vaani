@@ -110,22 +110,32 @@ export default function App() {
           : true;
         setWakeWordEnabled(shouldEnableWakeWord);
 
-        const auth = await LocalDb.loadAuth();
-        if (auth && new Date(auth.expiresAt) > new Date()) {
-          backendClient.setToken(auth.accessToken);
-          setAuth(auth.userId, auth.accessToken);
-        } else {
-          const deviceId = await DeviceInfo.getUniqueId();
-          const resp = await backendClient.auth.registerDevice({
-            device_id: deviceId,
-            preferred_language: 'en',
-          });
-          await LocalDb.saveAuth({
-            userId: resp.user_id,
-            accessToken: resp.access_token,
-            expiresAt: resp.expires_at,
-          });
-          setAuth(resp.user_id, resp.access_token);
+        try {
+          const auth = await LocalDb.loadAuth();
+          if (auth && new Date(auth.expiresAt) > new Date()) {
+            backendClient.setToken(auth.accessToken);
+            setAuth(auth.userId, auth.accessToken);
+          } else {
+            const deviceId = await DeviceInfo.getUniqueId();
+            const resp = await backendClient.auth.registerDevice({
+              device_id: deviceId,
+              preferred_language: 'en',
+            });
+            await LocalDb.saveAuth({
+              userId: resp.user_id,
+              accessToken: resp.access_token,
+              expiresAt: resp.expires_at,
+            });
+            setAuth(resp.user_id, resp.access_token);
+          }
+        } catch (authErr: any) {
+          console.warn('[App] Training backend unreachable — operating in offline mode:', authErr?.message ?? authErr);
+          try {
+            const deviceId = await DeviceInfo.getUniqueId();
+            setAuth(`local_${deviceId.slice(0, 8)}`, '');
+          } catch {
+            setAuth('local_user', '');
+          }
         }
 
         const adapters = await restoreAdaptersOnBoot();

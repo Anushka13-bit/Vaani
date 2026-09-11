@@ -5,8 +5,12 @@ Dispatches local fine-tune jobs (BackgroundTasks / thread pool).
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from datetime import datetime, timezone
+
+# Ensure unsupported MPS operations fall back to CPU on Mac Apple Silicon
+os.environ.setdefault("PYTORCH_ENABLE_MPS_FALLBACK", "1")
 
 from app.config import settings
 
@@ -27,7 +31,10 @@ def run_training_job(job_id: str, session_id: str, user_id: str) -> None:
     from ml.run_finetune import run_finetune
 
     logger.info("Starting training job %s session=%s user=%s", job_id, session_id, user_id)
-    run_finetune(session_id=session_id, user_id=user_id, job_id=job_id)
+    try:
+        run_finetune(session_id=session_id, user_id=user_id, job_id=job_id)
+    except Exception as exc:
+        logger.error("Training job %s session=%s failed: %s", job_id, session_id, exc)
 
 
 def _sync_db_session():

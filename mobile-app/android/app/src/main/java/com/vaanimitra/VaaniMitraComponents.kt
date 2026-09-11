@@ -54,6 +54,15 @@ object VaaniMitraComponents {
         }
     }
 
+    @Volatile
+    private var audioCaptureManager: com.vaanimitra.audio.AudioCaptureManager? = null
+
+    fun audioCaptureManager(): com.vaanimitra.audio.AudioCaptureManager {
+        return audioCaptureManager ?: synchronized(this) {
+            audioCaptureManager ?: com.vaanimitra.audio.AudioCaptureManager().also { audioCaptureManager = it }
+        }
+    }
+
     fun actionExecutor(context: Context): ActionExecutor {
         val appContext = context.applicationContext
         return actionExecutor ?: synchronized(this) {
