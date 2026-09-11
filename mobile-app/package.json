@@ -3,11 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "android": "ANDROID_HOME=${ANDROID_HOME:-$HOME/Library/Android/sdk} PATH=$HOME/Library/Android/sdk/platform-tools:$HOME/Library/Android/sdk/emulator:$PATH react-native run-android",
+    "android": "react-native run-android",
     "ios": "react-native run-ios",
     "start": "react-native start",
     "reverse": "adb reverse tcp:8081 tcp:8081 && adb reverse tcp:8000 tcp:8000",
-    "lint": "eslint . --ext .ts,.tsx"
+    "lint": "eslint . --ext .ts,.tsx",
+    "tsc": "tsc --noEmit"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^1.23.1",
@@ -26,13 +27,19 @@
     "zustand": "^4.5.2"
   },
   "devDependencies": {
+    "@babel/core": "^7.24.0",
+    "@babel/preset-env": "^7.24.0",
+    "@babel/runtime": "^7.24.0",
+    "@react-native/babel-preset": "0.74.83",
     "@react-native/metro-config": "^0.74.0",
     "@types/react": "^18.2.73",
     "@types/react-native": "^0.73.0",
+    "@types/react-native-vector-icons": "^6.4.18",
     "@typescript-eslint/eslint-plugin": "^7.7.0",
     "@typescript-eslint/parser": "^7.7.0",
     "eslint": "^8.57.0",
     "typescript": "5.0.4",
-    "@react-native-community/cli": "latest"
+    "@react-native-community/cli": "latest",
+    "@react-native-community/cli-platform-android": "latest"
   }
 }

@@ -11,6 +11,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import AudioRecorderPlayer from 'react-native-audio-recorder-player';
 import { backendClient } from '../api/trainingBackendClient';
 import { useStore } from '../state/store';
 import type { Prompt } from '../api/dto';
@@ -18,12 +19,21 @@ import {
   downloadAndLoadClusterAdapter,
   downloadAndLoadUserAdapter,
 } from '../services/adapterService';
-import { SpeechBridge } from '../native/SpeechBridge';
 import DeviceInfo from 'react-native-device-info';
 import { LocalDb } from '../storage/localDb';
 
+const recorder = new AudioRecorderPlayer();
 const POLL_INTERVAL_MS = 3000;
 const POLL_TIMEOUT_MS = 30 * 60 * 1000; // 30 min max for local fine-tune
+
+// Offline fallback prompts — used when the training backend is unreachable
+const OFFLINE_PROMPTS: Prompt[] = [
+  { prompt_id: 'offline_1', text: 'Please open the weather app for me', language: 'en' },
+  { prompt_id: 'offline_2', text: 'Set an alarm for seven in the morning', language: 'en' },
+  { prompt_id: 'offline_3', text: 'Send a message to my caregiver', language: 'en' },
+  { prompt_id: 'offline_4', text: 'Call home please', language: 'en' },
+  { prompt_id: 'offline_5', text: 'I need some help right now', language: 'en' },
+];
 
 function isNetworkError(e: any): boolean {
   const msg = (e?.message ?? '').toLowerCase();
@@ -61,6 +71,7 @@ export default function CalibrationScreen({ navigation }: any) {
     'loading' | 'prompts' | 'recording' | 'uploading' | 'training' | 'done' | 'error'
   >('loading');
   const [errorMsg, setErrorMsg] = useState('');
+  const [isOfflineMode, setIsOfflineMode] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
 
@@ -104,7 +115,7 @@ export default function CalibrationScreen({ navigation }: any) {
         }
       }
 
-      const resp = await backendClient.calibration.getPrompts(preferredLanguage, 40);
+      const resp = await backendClient.calibration.getPrompts(preferredLanguage, 5);
       setPrompts(resp.prompts);
       setPromptSetId(resp.prompt_set_id);
 
@@ -121,23 +132,20 @@ export default function CalibrationScreen({ navigation }: any) {
       setSessionId(session.session_id);
       setPhase('prompts');
     } catch (e: any) {
-      setErrorMsg(isNetworkError(e) ? networkErrorMessage() : (e?.message ?? 'Failed to load prompts'));
-      setPhase('error');
+      if (isNetworkError(e)) {
+        // Backend unreachable — switch to offline mode with local prompts
+        console.warn('[CalibrationScreen] Backend unreachable, using offline prompts:', e?.message);
+        setIsOfflineMode(true);
+        setPrompts(OFFLINE_PROMPTS);
+        setPromptSetId('offline');
+        setSessionId('offline_session');
+        setPhase('prompts');
+      } else {
+        setErrorMsg(e?.message ?? 'Failed to load prompts');
+        setPhase('error');
+      }
     }
   }, [userId, preferredLanguage, setAuth]);
-
-  useEffect(() => {
-    navigation.setOptions({
-      headerRight: () => (
-        <TouchableOpacity
-          onPress={() => navigation.navigate('Settings')}
-          style={{ paddingHorizontal: 12, paddingVertical: 6 }}
-        >
-          <Text style={{ color: '#6C63FF', fontWeight: '700', fontSize: 14 }}>Settings</Text>
-        </TouchableOpacity>
-      ),
-    });
-  }, [navigation]);
 
   useEffect(() => {
     loadCalibrationData();
@@ -146,19 +154,15 @@ export default function CalibrationScreen({ navigation }: any) {
   useEffect(() => () => clearPoll(), [clearPoll]);
 
   const startRecording = useCallback(async () => {
-    if (!sessionId || !prompts[currentIndex]) return;
     try {
       setIsRecording(true);
-      await SpeechBridge.startCalibrationRecording(
-        sessionId,
-        currentIndex + 1,
-        prompts[currentIndex].text,
-      );
+      const path = await recorder.startRecorder();
+      setLastRecordingUri(path);
     } catch (e: any) {
-      Alert.alert('Recording error', e?.message ?? 'Failed to start recording');
+      Alert.alert('Recording error', e?.message ?? 'Unknown error');
       setIsRecording(false);
     }
-  }, [sessionId, prompts, currentIndex]);
+  }, []);
 
   const loadClusterAdapter = useCallback(async () => {
     const handle = await downloadAndLoadClusterAdapter(
@@ -185,7 +189,36 @@ export default function CalibrationScreen({ navigation }: any) {
     }
   }, [loadClusterAdapter, setActiveAdapters]);
 
-  const pollTrainingStatus = useCallback(async (sid: string, uid: string) => {
+  const triggerAndPollTraining = useCallback(async () => {
+    if (!sessionId || !userId) {
+      setErrorMsg('Session not ready. Please retry calibration.');
+      setPhase('error');
+      return;
+    }
+
+    try {
+      await backendClient.calibration.triggerTraining(sessionId);
+    } catch (e: any) {
+      if (isNetworkError(e)) {
+        setErrorMsg(networkErrorMessage());
+        setPhase('error');
+        return;
+      }
+      if (e?.response?.status === 501) {
+        try {
+          setTrainingMessage('Live training disabled — loading pre-baked cluster adapter…');
+          await loadClusterAdapter();
+        } catch (clusterErr: any) {
+          setErrorMsg(clusterErr?.message ?? 'Failed to download voice model');
+          setPhase('error');
+        }
+        return;
+      }
+      setErrorMsg(e?.response?.data?.detail?.message ?? e?.message ?? 'Training trigger failed');
+      setPhase('error');
+      return;
+    }
+
     pollStartRef.current = Date.now();
     pollRef.current = setInterval(async () => {
       if (Date.now() - pollStartRef.current > POLL_TIMEOUT_MS) {
@@ -201,26 +234,23 @@ export default function CalibrationScreen({ navigation }: any) {
       }
 
       try {
-        const adapterStatus = await backendClient.calibration
-          .getSessionAdapterStatus(sid)
-          .catch(() => null);
+        const [calStatus, adapterStatus] = await Promise.all([
+          backendClient.calibration.getStatus(sessionId),
+          backendClient.calibration.getSessionAdapterStatus(sessionId).catch(() => null),
+        ]);
 
-        const calStatus = await backendClient.calibration
-          .getStatus(sid)
-          .catch(() => null);
-
-        const progress = adapterStatus?.progress_pct ?? calStatus?.progress_pct ?? 10;
+        const progress = adapterStatus?.progress_pct ?? calStatus.progress_pct;
         setTrainingProgress(progress);
         setTrainingMessage(
           adapterStatus?.message ??
-            (calStatus?.status === 'TRAINING' ? 'Fine-tuning on your laptop…' : 'Processing on laptop…'),
+            (calStatus.status === 'TRAINING' ? 'Fine-tuning on your laptop…' : 'Waiting…'),
         );
 
         const failed =
-          adapterStatus?.status === 'failed' || calStatus?.status === 'FAILED';
+          calStatus.status === 'FAILED' || adapterStatus?.status === 'failed';
         const ready =
           adapterStatus?.status === 'ready' ||
-          (calStatus?.status === 'COMPLETE' && calStatus?.resulting_adapter_id);
+          (calStatus.status === 'COMPLETE' && calStatus.resulting_adapter_id);
 
         if (failed) {
           clearPoll();
@@ -239,8 +269,8 @@ export default function CalibrationScreen({ navigation }: any) {
         if (ready) {
           clearPoll();
           const adapterId =
-            adapterStatus?.adapter_id ?? calStatus?.resulting_adapter_id ?? `user_${uid}`;
-          await loadUserAdapter(uid, adapterId, 1, sid);
+            adapterStatus?.adapter_id ?? calStatus.resulting_adapter_id ?? `user_${userId}`;
+          await loadUserAdapter(userId, adapterId, 1, sessionId);
         }
       } catch (pollErr: any) {
         if (isNetworkError(pollErr)) {
@@ -252,58 +282,68 @@ export default function CalibrationScreen({ navigation }: any) {
         }
       }
     }, POLL_INTERVAL_MS);
-  }, [loadClusterAdapter, loadUserAdapter, clearPoll]);
+  }, [sessionId, userId, loadClusterAdapter, loadUserAdapter, clearPoll]);
 
-  const uploadBatchAndTrain = useCallback(async (sid: string, uid: string) => {
-    try {
-      setPhase('uploading');
-      setTrainingMessage('Uploading all calibration clips and manifest in single batch…');
+  const uploadCurrentSample = useCallback(async () => {
+    if (!sessionId || !lastRecordingUri) return;
+    const prompt = prompts[currentIndex];
 
-      const baseUrl = backendClient.calibration.getBaseUrl();
-      const token = backendClient.getToken() || '';
-
-      await SpeechBridge.uploadCalibrationBatch(sid, baseUrl, token);
-
-      setPhase('training');
-      setTrainingMessage('Local fine-tune queued on laptop…');
-      await pollTrainingStatus(sid, uid);
-    } catch (uploadErr: any) {
-      console.warn('[CalibrationScreen] Batch upload failed:', uploadErr);
-      setErrorMsg(
-        isNetworkError(uploadErr)
-          ? networkErrorMessage()
-          : (uploadErr?.message ?? 'Batch upload failed — check laptop server'),
-      );
-      setPhase('error');
-    }
-  }, [pollTrainingStatus]);
-
-  const stopRecording = useCallback(async () => {
-    if (!sessionId || !prompts[currentIndex]) return;
-    try {
-      setIsRecording(false);
-      const prompt = prompts[currentIndex];
-      const result = await SpeechBridge.stopCalibrationRecording(
-        sessionId,
-        currentIndex + 1,
-        prompt.text,
-      );
-      setLastRecordingUri(result.filePath);
+    // Offline mode: skip network upload, just advance locally
+    if (isOfflineMode) {
       setSamplesUploaded(prev => prev + 1);
+      if (currentIndex + 1 < prompts.length) {
+        setCurrentIndex(prev => prev + 1);
+        setPhase('prompts');
+      } else {
+        // All prompts recorded offline — load the cluster adapter
+        setPhase('training');
+        setTrainingMessage('Loading voice model…');
+        try {
+          await loadClusterAdapter();
+        } catch (e: any) {
+          setErrorMsg(e?.message ?? 'Failed to load voice model');
+          setPhase('error');
+        }
+      }
+      return;
+    }
+
+    try {
+      const resp = await backendClient.calibration.uploadSample(
+        sessionId,
+        lastRecordingUri,
+        prompt.prompt_id,
+      );
+      setSamplesUploaded(resp.samples_received);
 
       if (currentIndex + 1 < prompts.length) {
         setCurrentIndex(prev => prev + 1);
+        setPhase('prompts');
       } else {
-        // All clips recorded — send single batched request
-        if (userId) {
-          await uploadBatchAndTrain(sessionId, userId);
-        }
+        setPhase('training');
+        await triggerAndPollTraining();
       }
+    } catch (e: any) {
+      setErrorMsg(
+        isNetworkError(e)
+          ? networkErrorMessage()
+          : (e?.message ?? 'Upload failed — is the laptop server running?'),
+      );
+      setPhase('error');
+    }
+  }, [sessionId, lastRecordingUri, currentIndex, prompts, isOfflineMode, loadClusterAdapter, triggerAndPollTraining]);
+
+  const stopRecording = useCallback(async () => {
+    try {
+      await recorder.stopRecorder();
+      setIsRecording(false);
+      setPhase('uploading');
+      await uploadCurrentSample();
     } catch (e: any) {
       Alert.alert('Stop recording error', e?.message ?? 'Unknown error');
       setIsRecording(false);
     }
-  }, [sessionId, prompts, currentIndex, userId, uploadBatchAndTrain]);
+  }, [uploadCurrentSample]);
 
   if (phase === 'loading') {
     return (
@@ -318,23 +358,22 @@ export default function CalibrationScreen({ navigation }: any) {
     return (
       <View style={styles.center}>
         <Text style={styles.errorText}>⚠️ {errorMsg}</Text>
-        <Text style={[styles.hint, { marginTop: 12 }]}>
-          Voice activation ("Hey Jarvis"), on-device transcription, and phrasebook work completely offline. Calibration is only required if you want to train custom voice models on your laptop.
-        </Text>
         <TouchableOpacity style={styles.btn} onPress={loadCalibrationData}>
-          <Text style={styles.btnText}>Retry Connection</Text>
+          <Text style={styles.btnText}>Retry</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.btn, styles.secondaryBtn]}
-          onPress={() => navigation.navigate('Settings')}
+          onPress={async () => {
+            try {
+              setPhase('training');
+              await loadClusterAdapter();
+            } catch (e: any) {
+              setErrorMsg(e?.message ?? 'Fallback failed');
+              setPhase('error');
+            }
+          }}
         >
-          <Text style={styles.btnText}>Go to Settings (Hey Jarvis)</Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.btn, styles.secondaryBtn]}
-          onPress={() => navigation.navigate('Phrasebook')}
-        >
-          <Text style={styles.btnText}>Open Phrasebook</Text>
+          <Text style={styles.btnText}>Use demo cluster adapter</Text>
         </TouchableOpacity>
       </View>
     );
@@ -373,8 +412,13 @@ export default function CalibrationScreen({ navigation }: any) {
   return (
     <ScrollView contentContainerStyle={styles.container}>
       <Text style={styles.title}>Voice Calibration</Text>
+      {isOfflineMode && (
+        <View style={styles.offlineBadge}>
+          <Text style={styles.offlineBadgeText}>📵 Offline Mode — recordings saved locally</Text>
+        </View>
+      )}
       <Text style={styles.progress}>
-        Prompt {currentIndex + 1} of {prompts.length}  ·  {samplesUploaded} uploaded
+        Prompt {currentIndex + 1} of {prompts.length}  ·  {samplesUploaded} recorded
       </Text>
 
       <View style={styles.promptCard}>
@@ -382,8 +426,11 @@ export default function CalibrationScreen({ navigation }: any) {
       </View>
 
       <Text style={styles.hint}>
-        Read the phrase aloud clearly. Audio uploads to your laptop over local network/USB.
+        {isOfflineMode
+          ? 'Read the phrase aloud clearly. Your voice samples are saved on your device.'
+          : 'Read the phrase aloud clearly. Audio uploads to your laptop over local network/USB.'}
       </Text>
+
 
       {phase === 'uploading' ? (
         <ActivityIndicator size="small" color="#6C63FF" style={{ marginTop: 20 }} />
@@ -422,4 +469,9 @@ const styles = StyleSheet.create({
   subtitle: { fontSize: 16, color: '#ccc', marginTop: 12, textAlign: 'center' },
   errorText: { fontSize: 16, color: '#E74C3C', textAlign: 'center', marginBottom: 24 },
   doneText: { fontSize: 28, color: '#6C63FF', marginBottom: 12 },
+  offlineBadge: {
+    backgroundColor: '#2A1F0A', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 14,
+    marginBottom: 12, borderWidth: 1, borderColor: '#7A5F1A',
+  },
+  offlineBadgeText: { fontSize: 12, color: '#C8A93E', fontWeight: '600' },
 });

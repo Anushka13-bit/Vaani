@@ -2,11 +2,14 @@ import React, { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  LogBox,
   PermissionsAndroid,
   Platform,
   StatusBar,
   View,
 } from 'react-native';
+
+LogBox.ignoreAllLogs();
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
@@ -18,6 +21,8 @@ import { useStore } from './state/store';
 import { restoreAdaptersOnBoot, syncPhrasebookToNative } from './services/adapterService';
 import { SpeechBridge } from './native/SpeechBridge';
 
+import WelcomeScreen from './screens/WelcomeScreen';
+import ListeningScreen from './screens/ListeningScreen';
 import CalibrationScreen from './screens/CalibrationScreen';
 import SettingsScreen from './screens/SettingsScreen';
 import PhrasebookScreen from './screens/PhrasebookScreen';
@@ -40,6 +45,8 @@ export async function requestVoicePermissions(): Promise<boolean> {
 }
 
 export type RootStackParamList = {
+  Welcome: undefined;
+  Listening: undefined;
   Calibration: undefined;
   Settings: undefined;
   Phrasebook: undefined;
@@ -49,15 +56,16 @@ export type RootStackParamList = {
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
-const DARK_THEME = {
-  dark: true,
+// Warm light theme matching the new UI design system
+const LIGHT_THEME = {
+  dark: false,
   colors: {
-    primary: '#6C63FF',
-    background: '#0F0F1A',
-    card: '#1A1A2E',
-    text: '#E8E8FF',
-    border: '#2A2A3E',
-    notification: '#6C63FF',
+    primary: '#FF4D4D',
+    background: '#F8F9FA',
+    card: '#FFFFFF',
+    text: '#111827',
+    border: '#E5E7EB',
+    notification: '#FF4D4D',
   },
 };
 
@@ -198,24 +206,35 @@ export default function App() {
 
   if (!ready) {
     return (
-      <View style={{ flex: 1, backgroundColor: '#0F0F1A', justifyContent: 'center', alignItems: 'center' }}>
-        <ActivityIndicator size="large" color="#6C63FF" />
+      <View style={{ flex: 1, backgroundColor: '#FFF9F2', justifyContent: 'center', alignItems: 'center' }}>
+        <ActivityIndicator size="large" color="#FF4D4D" />
       </View>
     );
   }
 
   return (
     <SafeAreaProvider>
-      <StatusBar barStyle="light-content" backgroundColor="#0F0F1A" />
-      <NavigationContainer theme={DARK_THEME as any}>
+      <StatusBar barStyle="dark-content" backgroundColor="#FFF9F2" />
+      <NavigationContainer theme={LIGHT_THEME as any}>
         <Stack.Navigator
-          initialRouteName="Calibration"
+          initialRouteName="Welcome"
           screenOptions={{
-            headerStyle: { backgroundColor: '#1A1A2E' },
-            headerTintColor: '#E8E8FF',
+            headerStyle: { backgroundColor: '#FFFFFF' },
+            headerTintColor: '#111827',
             headerTitleStyle: { fontWeight: '700' },
+            headerShadowVisible: false,
           }}
         >
+          <Stack.Screen
+            name="Welcome"
+            component={WelcomeScreen}
+            options={{ headerShown: false }}
+          />
+          <Stack.Screen
+            name="Listening"
+            component={ListeningScreen}
+            options={{ headerShown: false }}
+          />
           <Stack.Screen
             name="Calibration"
             component={CalibrationScreen}
@@ -224,7 +243,7 @@ export default function App() {
           <Stack.Screen
             name="Settings"
             component={SettingsScreen}
-            options={{ title: 'Settings' }}
+            options={{ headerShown: false }}
           />
           <Stack.Screen
             name="Phrasebook"
