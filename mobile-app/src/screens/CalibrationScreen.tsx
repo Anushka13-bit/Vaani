@@ -25,9 +25,11 @@ import { colors } from '../theme/colors';
 
 const recorder = new AudioRecorderPlayer();
 const POLL_INTERVAL_MS = 3000;
-// Expected training time is ~2-6 min (M3/MPS, small calibration sessions). 10 min gives
-// margin over that without leaving a live demo stalled for 30 min if training hangs.
-const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+// Training time swings hard with the backend machine: ~2-6 min on M3/MPS or CUDA, but
+// a CPU-only box runs 40 clips x 4 epochs (80 steps) plus ONNX export and INT8
+// quantization well past 10 min. Sized for the CPU case — a timeout here silently
+// downgrades the user to the un-personalized base adapter, which is worse than waiting.
+const POLL_TIMEOUT_MS = 30 * 60 * 1000;
 // Tolerate brief network blips (e.g. a USB/hotspot hiccup) without aborting the whole
 // flow — only treat the laptop as unreachable after this many consecutive failed polls.
 const MAX_CONSECUTIVE_POLL_FAILURES = 5; // ~15s of sustained unreachability at 3s interval

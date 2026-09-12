@@ -226,8 +226,13 @@ def _train_user_lora(
             self.proc = proc
 
         def __call__(self, features: list[dict]) -> dict:
-            input_features = torch.stack([f["input_features"] for f in features])
-            label_list = [f["labels"] for f in features]
+            # prepare() returns torch tensors, but dataset.map() round-trips them
+            # through Arrow, which stores them as plain Python lists. torch.as_tensor
+            # accepts either, so this works whether or not Arrow was involved.
+            input_features = torch.stack(
+                [torch.as_tensor(f["input_features"], dtype=torch.float32) for f in features]
+            )
+            label_list = [torch.as_tensor(f["labels"], dtype=torch.long) for f in features]
             labels = torch.nn.utils.rnn.pad_sequence(
                 label_list, batch_first=True, padding_value=-100
             )
