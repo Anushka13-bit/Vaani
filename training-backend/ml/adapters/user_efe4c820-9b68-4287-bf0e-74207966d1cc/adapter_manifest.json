@@ -1,0 +1,9 @@
+{
+  "adapter_id": "user_efe4c820-9b68-4287-bf0e-74207966d1cc",
+  "type": "USER",
+  "language_code": "en",
+  "base_model": "openai/whisper-small",
+  "version": 1,
+  "weights_file": "adapter_model.safetensors",
+  "parent_adapter_id": "torgo_cluster_english_v1"
+}
