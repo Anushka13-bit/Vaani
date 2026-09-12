@@ -53,6 +53,15 @@ class OnnxRuntimeHolder private constructor(
                     OnnxRuntimeHolder(encSession, decSession, "CPU", modelId).also { instance = it }
                 } catch (e2: Exception) {
                     Log.e(TAG, "CPU fallback also failed: ${e2.message}")
+                    // Failing on both NNAPI and CPU points at the file, not the provider.
+                    if (e2.message?.contains("PROTOBUF", ignoreCase = true) == true) {
+                        Log.e(
+                            TAG,
+                            "Model file is not valid ONNX — the bundle is corrupt or was " +
+                                "partially downloaded. Re-install it (encoder=${enc.length()}B " +
+                                "decoder=${dec.length()}B at $bundleDir).",
+                        )
+                    }
                     null
                 }
             }

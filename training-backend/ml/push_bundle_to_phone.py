@@ -18,8 +18,8 @@ Requires a debuggable (debug) build, since it relies on `adb run-as`.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
-import shutil
 import subprocess
 import sys
 import tempfile
@@ -82,7 +82,18 @@ def main() -> None:
         for label, name in (("encoder_file", encoder), ("decoder_file", decoder)):
             if not name or not (staged / name).is_file():
                 sys.exit(f"Manifest {label}={name!r} is missing from the bundle — refusing to install.")
-        print(f"Manifest OK: encoder={encoder} decoder={decoder}")
+
+        # Catch a corrupt export here rather than after pushing ~200MB, where it would
+        # surface on-device as an opaque ORT_INVALID_PROTOBUF at inference time.
+        checksums = manifest.get("checksums") or {}
+        for key, name in (("encoder", encoder), ("decoder", decoder)):
+            expected = checksums.get(key)
+            if not expected:
+                continue
+            digest = hashlib.sha256((staged / name).read_bytes()).hexdigest()
+            if f"sha256:{digest}".lower() != str(expected).lower():
+                sys.exit(f"{name} failed checksum — bundle is corrupt. Re-run export_whisper_mobile.py.")
+        print(f"Manifest OK: encoder={encoder} decoder={decoder} (checksums verified)")
 
         dest = f"files/whisper_models/{args.install_as}"
         run([adb, "shell", "rm", "-rf", DEVICE_TMP], check=False)

@@ -71,7 +71,12 @@ object VoicePipeline {
 
         adapterManager.restorePersistedStack()
         val activeAdapter = adapterManager.currentStackedAdapters().firstOrNull()
-        val adapterId = activeAdapter?.adapterId ?: "torgo_base_adapter_english_v1"
+        val preferredAdapterId = activeAdapter?.adapterId ?: "torgo_base_adapter_english_v1"
+        // Tolerate id drift (adapter renames, a stale build, a bundle installed under a
+        // different id) rather than falling back to cloud STT while a usable model is
+        // sitting on disk under another name.
+        val adapterId = ModelBundleManager.findReadyBundleId(app, preferredAdapterId)
+            ?: preferredAdapterId
 
         // VAD-gated capture with 8s hard timeout — returns to wake listening on silence/timeout
         val pcm = withTimeoutOrNull(LISTEN_TIMEOUT_MS) {
