@@ -36,7 +36,7 @@ def load_eval_set(manifest: Path) -> list[dict]:
     Kept as plain data so held-out calibration audio, corrections, and a curated
     regression set can all feed the same evaluator.
     """
-    items = json.loads(manifest.read_text())
+    items = json.loads(manifest.read_text(encoding="utf-8"))
     if not isinstance(items, list) or not items:
         raise SystemExit(f"Eval manifest {manifest} is empty or not a list")
     missing = [i["audio_path"] for i in items if not Path(i["audio_path"]).is_file()]
@@ -147,7 +147,7 @@ def main() -> None:
     }
     if args.report:
         args.report.parent.mkdir(parents=True, exist_ok=True)
-        args.report.write_text(json.dumps(report, indent=2))
+        args.report.write_text(json.dumps(report, indent=2), encoding="utf-8")
         logger.info("Report written to %s", args.report)
 
     logger.info("WER  candidate=%.4f  baseline=%.4f  improvement=%+.4f",

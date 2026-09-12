@@ -85,7 +85,7 @@ def _load_calibration_pairs(session_id: str) -> list[tuple[Path, str]]:
             manifest_file = settings.SESSIONS_DIR / session_id / "manifest.json"
             if manifest_file.is_file():
                 try:
-                    data = json.loads(manifest_file.read_text())
+                    data = json.loads(manifest_file.read_text(encoding="utf-8"))
                     mapping = data.get("mapping", data) if isinstance(data, dict) else {}
                     for wav_file in (settings.SESSIONS_DIR / session_id).glob("*.wav"):
                         txt = mapping.get(wav_file.name) or mapping.get(wav_file.stem)
@@ -202,7 +202,7 @@ def _write_eval_manifest(holdout: list[tuple[Path, str]], work_dir: Path) -> Pat
     path = work_dir / "holdout.json"
     path.write_text(json.dumps(
         [{"audio_path": str(p), "reference": t} for p, t in holdout], indent=2
-    ))
+    ), encoding="utf-8")
     logger.info("Held out %d sample(s) for evaluation -> %s", len(holdout), path)
     return path
 
@@ -383,7 +383,8 @@ def _train_user_lora(
     model.save_pretrained(str(adapter_out))
     processor.save_pretrained(str(adapter_out))
     (adapter_out / "train_metrics.json").write_text(
-        json.dumps({"loss_history": losses, "train_result": train_result.metrics}, indent=2)
+        json.dumps({"loss_history": losses, "train_result": train_result.metrics}, indent=2),
+        encoding="utf-8",
     )
     return adapter_out
 
@@ -422,7 +423,7 @@ def _export_mobile_bundle(adapter_dir: Path, adapter_id: str) -> Path:
             "decoder": sha256_file(dec_int8),
         },
     }
-    (export_dir / "mobile_manifest.json").write_text(json.dumps(manifest, indent=2))
+    (export_dir / "mobile_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
     zip_path = build_bundle(export_dir, adapter_id, use_int8=True)
     return zip_path
 
@@ -453,7 +454,7 @@ def _register_user_adapter(
     weights = dest / "adapter_model.safetensors"
     if not weights.is_file():
         manifest["weights_file"] = "adapter_model.bin"
-    (dest / "adapter_manifest.json").write_text(json.dumps(manifest, indent=2))
+    (dest / "adapter_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     checksum = _sha256_file(dest / manifest["weights_file"]) if (dest / manifest["weights_file"]).is_file() else ""
 

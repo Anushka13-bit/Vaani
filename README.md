@@ -278,14 +278,43 @@ python ml/export_whisper_mobile.py \
   --quantize
 ```
 
+**Or run the whole thing in one command** — export, evaluate, deploy:
+
+```bash
+python ml/run_pipeline.py --adapter-dir sessions/<session-id>/training/lora_adapter
+```
+
+This exports the bundle, measures word error rate against the held-out clips that
+training reserved, and installs to the phone **only if the new adapter beat the
+baseline**. If it did not, nothing is deployed and the model already on the device
+is left alone — see `eval_report.json` for the per-sample comparison.
+
+Useful flags: `--device <serial>` when several phones are attached, `--baseline
+<adapter-dir>` to compare against a specific adapter rather than the base model,
+`--min-improvement 0.02` to require a 2-point WER drop, and `--skip-push` to build
+without deploying. `--skip-eval` exists for sessions with no held-out audio, but
+it deploys a model whose quality is unknown.
+
+Windows note: use `python` (not `python3`). The pipeline resolves `adb` from PATH;
+pass `--adb C:\path\to\adb.exe` if it is not there.
+
 See `training-backend/ml/MOBILE_SETUP.md` for full details. The backend serves the zip at `GET /v1/adapters/{adapter_id}/mobile`.
 
 ### 3. Wake word models (one-time after clone)
+
+Cross-platform (Windows, macOS, Linux):
+
+```bash
+python scripts/download_wakeword_models.py
+```
+
+<details><summary>macOS/Linux shell equivalent</summary>
 
 ```bash
 chmod +x scripts/download_wakeword_models.sh
 ./scripts/download_wakeword_models.sh
 ```
+</details>
 
 Downloads `melspectrogram.onnx`, `embedding_model.onnx`, and `hey_jarvis_v0.1.onnx` into `mobile-app/android/app/src/main/assets/` (gitignored). Train custom `hey_lily.onnx` per `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`.
 

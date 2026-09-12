@@ -1,1 +1,19 @@
 *.zip filter=lfs diff=lfs merge=lfs -text
+
+# Normalise line endings so a Windows checkout does not rewrite every file and
+# show the whole tree as modified. Scripts that Unix executes must stay LF even
+# when checked out on Windows; the Gradle batch wrapper must stay CRLF.
+* text=auto
+*.sh text eol=lf
+gradlew text eol=lf
+*.bat text eol=crlf
+gradlew.bat text eol=crlf
+
+# Binary assets must never be line-ending converted.
+*.onnx binary
+*.safetensors binary
+*.bin binary
+*.wav binary
+*.png binary
+*.jpg binary
+*.keystore binary

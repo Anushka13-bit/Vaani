@@ -192,7 +192,7 @@ async def calibrate(
 
     # Save finalized manifest in session directory if not already written
     if not (batch_dir / "manifest.json").exists() and manifest_map:
-        (batch_dir / "manifest.json").write_text(json.dumps(manifest_map, indent=2))
+        (batch_dir / "manifest.json").write_text(json.dumps(manifest_map, indent=2), encoding="utf-8")
 
     job_id = create_job_record(session_id, cal_session.user_id)
     write_status(session_id, status="queued", job_id=job_id, message="Training queued")

@@ -93,7 +93,7 @@ def main() -> None:
         manifest_path = staged / "mobile_manifest.json"
         if not manifest_path.is_file():
             sys.exit("Bundle has no mobile_manifest.json — the app cannot load it.")
-        manifest = json.loads(manifest_path.read_text())
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         encoder, decoder = manifest.get("encoder_file"), manifest.get("decoder_file")
         for label, name in (("encoder_file", encoder), ("decoder_file", decoder)):
             if not name or not (staged / name).is_file():

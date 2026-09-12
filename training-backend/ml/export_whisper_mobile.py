@@ -297,7 +297,7 @@ def main() -> None:
 
     adapter_dir = args.adapter_dir.resolve()
     adapter_id = args.adapter_id or json.loads(
-        (adapter_dir / "adapter_manifest.json").read_text()
+        (adapter_dir / "adapter_manifest.json").read_text(encoding="utf-8")
     )["adapter_id"]
     output_dir = (args.output_dir or Path("ml/mobile_export") / adapter_id).resolve()
     if output_dir.exists():
@@ -340,7 +340,7 @@ def main() -> None:
         },
         "sanity_check": sanity,
     }
-    (output_dir / "mobile_manifest.json").write_text(json.dumps(manifest, indent=2))
+    (output_dir / "mobile_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     build_bundle(output_dir, adapter_id, args.quantize)
     logger.info(

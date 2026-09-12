@@ -29,11 +29,11 @@ def write_status(session_id: str, **fields: Any) -> None:
     payload: dict[str, Any] = {"session_id": session_id, "updated_at": _now_iso()}
     if path.exists():
         try:
-            payload.update(json.loads(path.read_text()))
+            payload.update(json.loads(path.read_text(encoding="utf-8")))
         except Exception:
             pass
     payload.update(fields)
-    path.write_text(json.dumps(payload, indent=2))
+    path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
 
 def read_status(session_id: str) -> dict[str, Any] | None:
@@ -41,7 +41,7 @@ def read_status(session_id: str) -> dict[str, Any] | None:
     if not path.is_file():
         return None
     try:
-        return json.loads(path.read_text())
+        return json.loads(path.read_text(encoding="utf-8"))
     except Exception:
         return None
 
