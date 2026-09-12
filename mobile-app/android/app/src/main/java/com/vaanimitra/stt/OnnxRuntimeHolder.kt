@@ -18,7 +18,12 @@ class OnnxRuntimeHolder private constructor(
     val decoderSession: OrtSession,
     val executionProvider: String,
     val modelId: String,
+    val manifest: ModelBundleManager.MobileManifest,
 ) {
+    private val encoderInputName = manifest.encoderInputName
+    private val decoderInputIdsName = manifest.decoderInputIdsName
+    private val decoderEncoderHiddenName = manifest.decoderEncoderHiddenName
+
     val env: OrtEnvironment = OrtEnvironment.getEnvironment()
 
     companion object {
@@ -31,6 +36,12 @@ class OnnxRuntimeHolder private constructor(
             instance?.let { if (it.modelId == modelId) return it }
 
             val manifest = ModelBundleManager.readManifest(bundleDir) ?: return null
+            manifest.incompatibilityReason()?.let { reason ->
+                // Refuse rather than run: a mismatched model still produces output,
+                // it is just wrong, and that is far harder to diagnose than a refusal.
+                Log.e(TAG, "Bundle '$modelId' cannot be run by this build — $reason")
+                return null
+            }
             val enc = bundleDir.resolve(manifest.encoderFile)
             val dec = bundleDir.resolve(manifest.decoderFile)
             if (!enc.isFile || !dec.isFile) {
@@ -42,7 +53,7 @@ class OnnxRuntimeHolder private constructor(
                 val (encSession, ep) = createSession(context, enc)
                 val (decSession, _) = createSession(context, dec)
                 Log.i(TAG, "Whisper ONNX loaded model=$modelId EP=$ep")
-                OnnxRuntimeHolder(encSession, decSession, ep, modelId).also { instance = it }
+                OnnxRuntimeHolder(encSession, decSession, ep, modelId, manifest).also { instance = it }
             } catch (e: Exception) {
                 Log.e(TAG, "ONNX init failed, trying CPU-only: ${e.message}")
                 try {
@@ -50,7 +61,7 @@ class OnnxRuntimeHolder private constructor(
                     val opts = OrtSession.SessionOptions()
                     val encSession = env.createSession(enc.absolutePath, opts)
                     val decSession = env.createSession(dec.absolutePath, opts)
-                    OnnxRuntimeHolder(encSession, decSession, "CPU", modelId).also { instance = it }
+                    OnnxRuntimeHolder(encSession, decSession, "CPU", modelId, manifest).also { instance = it }
                 } catch (e2: Exception) {
                     Log.e(TAG, "CPU fallback also failed: ${e2.message}")
                     // Failing on both NNAPI and CPU points at the file, not the provider.
@@ -163,8 +174,8 @@ class OnnxRuntimeHolder private constructor(
         val idsShape = longArrayOf(1, inputIds.size.toLong())
         val idsTensor = OnnxTensor.createTensor(env, LongBuffer.wrap(inputIds), idsShape)
         val inputs = mutableMapOf<String, OnnxTensor>(
-            "input_ids" to idsTensor,
-            "encoder_hidden_states" to encoderHidden,
+            decoderInputIdsName to idsTensor,
+            decoderEncoderHiddenName to encoderHidden,
         )
         val result = decoderSession.run(inputs)
         idsTensor.close()

@@ -195,6 +195,76 @@ def wer_sanity_check(base_model_id: str, merged_model, sample_wav: Path | None) 
     }
 
 
+def describe_model(model, base_model: str) -> dict:
+    """
+    Derive the runtime contract from the checkpoint rather than assuming Whisper-small.
+
+    These values were hardcoded both here and in the Android code, so a model with
+    different dimensions (large-v3 uses 128 mel bins) or different special-token ids
+    would have been mis-tagged in the manifest and silently decoded as garbage on
+    device. Everything the phone needs to run the graph is read from the model and
+    its feature extractor.
+    """
+    from transformers import WhisperProcessor
+
+    processor = WhisperProcessor.from_pretrained(base_model)
+    fe = processor.feature_extractor
+    cfg = model.config
+    gen = getattr(model, "generation_config", None)
+
+    def pick(*candidates, default=None):
+        for value in candidates:
+            if value is not None:
+                return value
+        return default
+
+    n_samples = pick(getattr(fe, "n_samples", None), default=480000)
+    hop = pick(getattr(fe, "hop_length", None), default=160)
+    tok = processor.tokenizer
+
+    def token_id(piece: str, fallback: int | None = None) -> int | None:
+        try:
+            ids = tok.convert_tokens_to_ids(piece)
+            if isinstance(ids, int) and ids >= 0:
+                return ids
+        except Exception:
+            pass
+        return fallback
+
+    return {
+        "architecture": "whisper-encoder-decoder",
+        "sample_rate": int(pick(getattr(fe, "sampling_rate", None), default=16000)),
+        "n_mels": int(pick(getattr(fe, "feature_size", None), getattr(cfg, "num_mel_bins", None), default=80)),
+        "n_fft": int(pick(getattr(fe, "n_fft", None), default=400)),
+        "hop_length": int(hop),
+        "n_frames": int(n_samples // hop),
+        "mel_scale": "slaney",
+        "log_normalization": {"type": "whisper", "clip_db": 8.0, "offset": 4.0, "divisor": 4.0},
+        "vocab_size": int(getattr(cfg, "vocab_size", 0)) or None,
+        "decoder_kv_cache": bool(getattr(cfg, "use_cache", False)),
+        "io_names": {
+            "encoder_input": "input_features",
+            "encoder_output": "last_hidden_state",
+            "decoder_input_ids": "input_ids",
+            "decoder_encoder_hidden": "encoder_hidden_states",
+        },
+        "tokenizer": {"format": "hf_tokenizer_json", "byte_level_bpe": True},
+        "decoding": {
+            "strategy": "greedy",
+            "max_new_tokens": int(pick(getattr(gen, "max_length", None), default=128)),
+            "prompt_token_ids": [
+                t for t in (
+                    token_id("<|startoftranscript|>", 50258),
+                    token_id("<|en|>", 50259),
+                    token_id("<|transcribe|>", 50359),
+                    token_id("<|notimestamps|>", 50363),
+                ) if t is not None
+            ],
+            "eot_token_id": token_id("<|endoftext|>", 50257),
+        },
+    }
+
+
 def build_bundle(output_dir: Path, adapter_id: str, use_int8: bool) -> Path:
     # Ship only the precision the manifest actually points at. Bundling the fp32
     # graphs alongside the int8 ones tripled the download (~900MB vs ~250MB) with
@@ -263,8 +333,7 @@ def main() -> None:
         "merged_lora": True,
         "encoder_file": enc_file,
         "decoder_file": dec_file,
-        "sample_rate": 16000,
-        "n_mels": 80,
+        **describe_model(merged, args.base_model),
         "checksums": {
             "encoder": sha256_file(int8_paths.get("encoder", encoder)),
             "decoder": sha256_file(int8_paths.get("decoder", decoder)),

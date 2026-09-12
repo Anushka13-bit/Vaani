@@ -38,21 +38,25 @@ class OnnxWhisperRuntime(
 
         val encoderOut = holder.runEncoder(mel, nFrames)
         try {
-            val prompt = longArrayOf(START_TOKEN, LANG_EN, TASK_TRANSCRIBE, NO_TIMESTAMPS)
+            // Prompt, end-of-text and the token budget come from the bundle: these ids
+            // are tokenizer-specific and differ between Whisper variants, so hardcoding
+            // them silently produced garbage for any other model.
+            val prompt = holder.manifest.promptTokenIds
+            val eot = holder.manifest.eotTokenId
             val tokens = mutableListOf<Long>()
-            tokens.addAll(prompt.toList())
+            tokens.addAll(prompt)
             val logProbs = mutableListOf<Float>()
 
-            for (step in 0 until MAX_TOKENS) {
+            for (step in 0 until holder.manifest.maxNewTokens) {
                 val logits = holder.runDecoderStep(tokens.toLongArray(), encoderOut)
                 val (nextId, logProb) = argmaxLogits(logits)
                 logProbs.add(logProb)
-                if (nextId == EOT) break
+                if (nextId == eot) break
                 tokens.add(nextId)
             }
 
             WhisperTokenizer.load(bundleDir, adapterId)
-            val text = WhisperTokenizer.decode(tokens.drop(4))
+            val text = WhisperTokenizer.decode(tokens.drop(prompt.size))
             val avgLog = if (logProbs.isEmpty()) -1f else logProbs.average().toFloat()
             holder.reportEpPlacement(context)
             return DecodeResult(text.trim(), avgLog, holder.executionProvider)
