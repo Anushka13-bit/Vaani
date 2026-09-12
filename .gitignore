@@ -8,6 +8,12 @@ training-backend/ml/adapters/**/*.bin
 training-backend/ml/adapters/**/*.safetensors
 *.bin
 *.safetensors
+
+# Per-user adapters are produced by each calibration run and belong to one
+# patient on one machine. Committing them bloats every clone and makes the
+# adapter registry import other people's adapters at startup.
+training-backend/ml/adapters/user_*/
+
 *.venv
 *.venv_win
 # ── Runtime / generated ───────────────────────────────────────────────────────
