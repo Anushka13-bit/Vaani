@@ -30,6 +30,29 @@ export interface TranscriptionResult {
   segments: TranscriptSegment[];
 }
 
+// ── Transcribe + act (manual capture) ────────────────────────────────────────
+
+export type TranscriptOutcomeKind = 'action_executed' | 'dictated' | 'cancelled' | 'ignored';
+
+/**
+ * Result of SpeechBridge.stopManualCaptureAndTranscribe() — a transcript on its own
+ * (TranscriptionResult) doesn't say whether a command was actually run. Mirrors
+ * VoicePipeline.TranscriptOutcome on the native side.
+ */
+export interface TranscribeAndActResult {
+  text: string;
+  confidence: number;
+  languageDetected: string;
+  executionProvider: string;
+  outcome: TranscriptOutcomeKind;
+  /** Present when outcome === 'action_executed'. */
+  action?: ActionType;
+  actionSuccess?: boolean;
+  actionMessage?: string;
+  /** Present when outcome === 'cancelled' | 'ignored'. */
+  reason?: string;
+}
+
 // ── Intents & Actions ─────────────────────────────────────────────────────────
 
 export type ActionType =

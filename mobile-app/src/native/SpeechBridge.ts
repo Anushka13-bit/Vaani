@@ -2,7 +2,7 @@
  * VaaniMitra — SpeechBridge (§2.2)
  */
 import { NativeModules, NativeEventEmitter, EmitterSubscription } from 'react-native';
-import type { AdapterHandle, TranscriptSegment, TranscriptionResult } from './types';
+import type { AdapterHandle, TranscriptSegment, TranscriptionResult, TranscribeAndActResult } from './types';
 
 const { SpeechModule, RecognitionEventEmitter: RecognitionEventEmitterModule } = NativeModules;
 
@@ -93,7 +93,7 @@ export const SpeechBridge = {
    */
   startManualCapture: (): Promise<boolean> => SpeechModule.startManualCapture(),
 
-  stopManualCaptureAndTranscribe: (): Promise<TranscriptionResult> =>
+  stopManualCaptureAndTranscribe: (): Promise<TranscribeAndActResult> =>
     SpeechModule.stopManualCaptureAndTranscribe(),
 
   getCurrentAdapterInfo: (): Promise<AdapterHandle[]> =>

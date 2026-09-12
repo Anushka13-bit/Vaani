@@ -3,10 +3,12 @@ package com.vaanimitra.pipeline
 import android.content.Context
 import android.util.Log
 import com.vaanimitra.VaaniMitraComponents
+import com.vaanimitra.actions.ActionResult
 import com.vaanimitra.audio.AudioCaptureManager
 import com.vaanimitra.audio.VoiceActivityDetector
 import com.vaanimitra.bridge.RecognitionEventEmitter
 import com.vaanimitra.nlu.ActionType
+import com.vaanimitra.nlu.ParsedIntent
 import com.vaanimitra.stt.AndroidSpeechRecognizerFallback
 import com.vaanimitra.stt.ConfidenceScorer
 import com.vaanimitra.stt.ModelBundleManager
@@ -19,6 +21,23 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+
+/**
+ * What happened to a transcript after phrasebook/NLU routing — the same shape whether
+ * it arrived via wake-word capture ([VoicePipeline.processSession]) or a manual
+ * "tap mic" capture ([VoicePipeline.actOnTranscript] called directly). A raw transcript
+ * string alone tells a caller nothing about whether an action actually ran.
+ */
+sealed class TranscriptOutcome {
+    /** No action keyword matched — transcript is plain dictation. */
+    data class Dictated(val text: String) : TranscriptOutcome()
+    /** Matched an action and ActionExecutor ran it (success or failure is in [result]). */
+    data class ActionExecuted(val intent: ParsedIntent, val result: ActionResult) : TranscriptOutcome()
+    /** User declined or the confirmation prompt timed out. */
+    data class Cancelled(val reason: String) : TranscriptOutcome()
+    /** Blank transcript, a non-speech marker, or a dismissed low-confidence clarification. */
+    data class Ignored(val reason: String) : TranscriptOutcome()
+}
 
 /**
  * End-to-end: VAD capture → TORGO Whisper ONNX → confidence → phrasebook/NLU → gated action.
@@ -65,10 +84,6 @@ object VoicePipeline {
         val vad = VoiceActivityDetector()
         val engine = VaaniMitraComponents.whisperEngine(app)
         val adapterManager = VaaniMitraComponents.adapterManager(app)
-        val scorer = ConfidenceScorer()
-        val phrasebook = VaaniMitraComponents.phrasebookMatcher()
-        val parser = VaaniMitraComponents.intentParser()
-        val executor = VaaniMitraComponents.actionExecutor(app)
 
         adapterManager.restorePersistedStack()
         val activeAdapter = adapterManager.currentStackedAdapters().firstOrNull()
@@ -119,19 +134,42 @@ object VoicePipeline {
             Triple(text, 0.7f, "GoogleSTT")
         }
 
+        Log.i(TAG, "Transcript ($ep): $transcript")
+        actOnTranscript(app, transcript, avgLogProb, pcm.size * 1000L / 16000)
+    }
+
+    /**
+     * Routes a transcript through phrasebook/NLU and, for anything but plain dictation,
+     * actually runs it via [ActionExecutor][com.vaanimitra.actions.ActionExecutor] — the
+     * step a transcript alone does nothing without. Shared by the wake-word capture path
+     * above and any other capture path (e.g. a manual "tap mic" bridge call) that already
+     * has a transcript and wants the same real command-execution behavior, not a second,
+     * divergent implementation of it.
+     */
+    suspend fun actOnTranscript(
+        context: Context,
+        transcript: String,
+        avgLogProb: Float,
+        durationMs: Long,
+    ): TranscriptOutcome {
+        val app = context.applicationContext
+        val scorer = ConfidenceScorer()
+        val phrasebook = VaaniMitraComponents.phrasebookMatcher()
+        val parser = VaaniMitraComponents.intentParser()
+        val executor = VaaniMitraComponents.actionExecutor(app)
+
         if (transcript.isBlank()) {
-            Log.w(TAG, "Transcript came back empty from $ep — nothing to act on")
-            return
+            Log.w(TAG, "Transcript is blank — nothing to act on")
+            return TranscriptOutcome.Ignored("empty transcript")
         }
         if (isNonSpeechMarker(transcript)) {
             // Whisper labels silence/noise rather than returning nothing, and those
             // labels were being emitted downstream as if the user had dictated them.
             Log.i(TAG, "Non-speech audio ('$transcript') — ignoring")
-            return
+            return TranscriptOutcome.Ignored("non-speech marker: $transcript")
         }
-        Log.i(TAG, "Transcript ($ep): $transcript")
 
-        val segment = TranscriptSegment(transcript, 0, pcm.size * 1000L / 16000, avgLogProb)
+        val segment = TranscriptSegment(transcript, 0, durationMs, avgLogProb)
         val scored = scorer.score(listOf(segment), if (avgLogProb > 0) listOf(avgLogProb) else null)
         val finalSeg = scored.first()
 
@@ -144,11 +182,11 @@ object VoicePipeline {
                 listOf(transcript, "(cancel)"),
             ) ?: run {
                 Log.i(TAG, "Clarification dismissed — ending session")
-                return
+                return TranscriptOutcome.Ignored("clarification dismissed")
             }
             if (finalText.contains("cancel")) {
                 Log.i(TAG, "User cancelled at clarification")
-                return
+                return TranscriptOutcome.Cancelled("clarification: user chose cancel")
             }
         }
 
@@ -160,15 +198,15 @@ object VoicePipeline {
         if (intent.action == ActionType.DICTATE_TEXT) {
             Log.d(TAG, "DICTATE_TEXT — emitting transcript to React Native: $finalText")
             RecognitionEventEmitter.instance?.emitTranscriptSegment(
-                TranscriptSegment(finalText, 0, pcm.size * 1000L / 16000, avgLogProb)
+                TranscriptSegment(finalText, 0, durationMs, avgLogProb)
             )
-            return
+            return TranscriptOutcome.Dictated(finalText)
         }
 
         val confirmed = ConfirmationGate.confirmIfNeeded(app, intent)
         if (!confirmed) {
             Log.i(TAG, "Action cancelled by user")
-            return
+            return TranscriptOutcome.Cancelled("confirmation declined or timed out")
         }
 
         Log.i(TAG, "Executing intent: action=${intent.action} entities=${intent.entities} from '$finalText'")
@@ -181,6 +219,7 @@ object VoicePipeline {
         } else {
             Log.w(TAG, "Action FAILED: ${result.message} (accessibilityFallback=${result.requiresAccessibilityFallback})")
         }
+        return TranscriptOutcome.ActionExecuted(intent, result)
     }
 
     /**

@@ -35,6 +35,13 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- SET_ALARM — required by AndroidIntentActions.setAlarm's AlarmClock.ACTION_SET_ALARM
+         intent. Normal (not dangerous) permission — declaring it here is enough, no runtime
+         request needed. Without it the clock app rejects the intent with a
+         PermissionDenial, which surfaced only once real hardware actually reached this
+         code path (ActionType.SET_ALARM previously wasn't exercised end-to-end). -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM" />
+
     <!-- Package visibility (API 30+): without this, PackageManager hides every other
          app, so "open <app>" can never find what the user asked for. Declaring the
          launcher intent reveals launchable apps only — narrower than QUERY_ALL_PACKAGES,

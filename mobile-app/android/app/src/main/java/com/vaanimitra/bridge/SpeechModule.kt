@@ -98,11 +98,43 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
                 }
 
                 val result = whisperEngine.transcribe(trimmed)
+                val durationMs = trimmed.size.toLong() * 1000 / com.vaanimitra.audio.AudioCaptureManager.SAMPLE_RATE
+
+                // Transcribing is not the end of the job — a transcript that never reaches
+                // phrasebook/NLU/ActionExecutor is just text on screen, not a command that
+                // did anything. This is the same routing the wake-word path
+                // (VoicePipeline.processSession) already runs; calling actOnTranscript
+                // directly here means "tap mic and speak" actually executes real Android
+                // actions (opens the alarm clock, fires an SMS intent, etc.) instead of
+                // only ever displaying what was heard.
+                val outcome = com.vaanimitra.pipeline.VoicePipeline.actOnTranscript(
+                    reactContext, result.text, result.avgLogProb ?: 0f, durationMs,
+                )
+
                 val map = Arguments.createMap().apply {
                     putString("text", result.text)
                     putDouble("confidence", result.segments.firstOrNull()?.confidence?.toDouble() ?: 0.0)
                     putString("languageDetected", result.languageDetected)
                     putString("executionProvider", result.executionProvider)
+                    when (outcome) {
+                        is com.vaanimitra.pipeline.TranscriptOutcome.ActionExecuted -> {
+                            putString("outcome", "action_executed")
+                            putString("action", outcome.intent.action.name)
+                            putBoolean("actionSuccess", outcome.result.success)
+                            putString("actionMessage", outcome.result.message)
+                        }
+                        is com.vaanimitra.pipeline.TranscriptOutcome.Dictated -> {
+                            putString("outcome", "dictated")
+                        }
+                        is com.vaanimitra.pipeline.TranscriptOutcome.Cancelled -> {
+                            putString("outcome", "cancelled")
+                            putString("reason", outcome.reason)
+                        }
+                        is com.vaanimitra.pipeline.TranscriptOutcome.Ignored -> {
+                            putString("outcome", "ignored")
+                            putString("reason", outcome.reason)
+                        }
+                    }
                 }
                 promise.resolve(map)
             } catch (e: Exception) {

@@ -48,11 +48,30 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
       setStatusMessage('Processing speech…');
       try {
         const res = await SpeechBridge.stopManualCaptureAndTranscribe();
-        if (res?.text) {
-          setLastTranscript(res.text);
-          setStatusMessage(`Heard: "${res.text}"`);
-        } else {
+        if (!res?.text) {
           setStatusMessage('No speech detected — try again.');
+          return;
+        }
+        setLastTranscript(res.text);
+        // outcome reflects whether this actually did something on the phone (opened the
+        // alarm clock, fired an SMS intent, etc.) rather than just being transcribed —
+        // see VoicePipeline.actOnTranscript on the native side.
+        switch (res.outcome) {
+          case 'action_executed':
+            setStatusMessage(
+              res.actionSuccess
+                ? `Heard: "${res.text}" → ${res.actionMessage ?? 'done'}`
+                : `Heard: "${res.text}" → couldn't do that (${res.actionMessage ?? 'unknown error'})`,
+            );
+            break;
+          case 'dictated':
+            setStatusMessage(`Heard: "${res.text}"`);
+            break;
+          case 'cancelled':
+            setStatusMessage(`Heard: "${res.text}" — cancelled`);
+            break;
+          default:
+            setStatusMessage(`Heard: "${res.text}"`);
         }
       } catch (err: any) {
         setStatusMessage(null);
