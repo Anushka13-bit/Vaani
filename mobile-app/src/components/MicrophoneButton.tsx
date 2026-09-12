@@ -2,18 +2,24 @@ import React, {useEffect, useRef} from 'react';
 import {Animated, TouchableOpacity, View, StyleSheet} from 'react-native';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import {colors} from '../theme/colors';
+import RecordingOrb from './RecordingOrb';
 
 interface MicrophoneButtonProps {
   onPress?: () => void;
   size?: number;
+  isRecording?: boolean;
+  metering?: number;
 }
 
 /**
  * Central microphone button with concentric soft peach rings matching the reference UI.
+ * When recording is active, transforms into a minimalist rotating sunflower orb.
  */
 const MicrophoneButton: React.FC<MicrophoneButtonProps> = ({
   onPress,
   size = 84,
+  isRecording = false,
+  metering,
 }) => {
   const pulse = useRef(new Animated.Value(0)).current;
 
@@ -52,55 +58,61 @@ const MicrophoneButton: React.FC<MicrophoneButtonProps> = ({
       activeOpacity={0.85}
       onPress={onPress}
       style={[styles.wrapper, {width: ring3Size, height: ring3Size}]}>
-      {/* Outer faint peach ring */}
-      <Animated.View
-        style={[
-          styles.ring,
-          {
-            width: ring3Size,
-            height: ring3Size,
-            borderRadius: ring3Size / 2,
-            backgroundColor: '#FFF0EB',
-            transform: [{scale: outerPulseScale}],
-          },
-        ]}
-      />
-      {/* Middle soft peach ring */}
-      <View
-        style={[
-          styles.ring,
-          {
-            width: ring2Size,
-            height: ring2Size,
-            borderRadius: ring2Size / 2,
-            backgroundColor: '#FDE4DC',
-          },
-        ]}
-      />
-      {/* Inner soft peach ring */}
-      <View
-        style={[
-          styles.ring,
-          {
-            width: ring1Size,
-            height: ring1Size,
-            borderRadius: ring1Size / 2,
-            backgroundColor: '#FCD2C5',
-          },
-        ]}
-      />
-      {/* Core red-orange mic button */}
-      <View
-        style={[
-          styles.micCircle,
-          {
-            width: innerCircleSize,
-            height: innerCircleSize,
-            borderRadius: innerCircleSize / 2,
-          },
-        ]}>
-        <Icon name="mic" size={40} color={colors.white} />
-      </View>
+      {isRecording ? (
+        <RecordingOrb isRecording={isRecording} metering={metering} size={size} />
+      ) : (
+        <>
+          {/* Outer faint peach ring */}
+          <Animated.View
+            style={[
+              styles.ring,
+              {
+                width: ring3Size,
+                height: ring3Size,
+                borderRadius: ring3Size / 2,
+                backgroundColor: '#FFF0EB',
+                transform: [{scale: outerPulseScale}],
+              },
+            ]}
+          />
+          {/* Middle soft peach ring */}
+          <View
+            style={[
+              styles.ring,
+              {
+                width: ring2Size,
+                height: ring2Size,
+                borderRadius: ring2Size / 2,
+                backgroundColor: '#FDE4DC',
+              },
+            ]}
+          />
+          {/* Inner soft peach ring */}
+          <View
+            style={[
+              styles.ring,
+              {
+                width: ring1Size,
+                height: ring1Size,
+                borderRadius: ring1Size / 2,
+                backgroundColor: '#FCD2C5',
+              },
+            ]}
+          />
+          {/* Core red-orange mic button */}
+          <View
+            style={[
+              styles.micCircle,
+              {
+                width: innerCircleSize,
+                height: innerCircleSize,
+                borderRadius: innerCircleSize / 2,
+              },
+            ]}>
+            <Icon name="mic" size={40} color={colors.white} />
+          </View>
+        </>
+      )}
     </TouchableOpacity>
   );
 };
