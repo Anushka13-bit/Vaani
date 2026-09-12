@@ -30,6 +30,7 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
 
   const [isRecording, setIsRecording] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
+  const [metering, setMetering] = useState<number | undefined>(undefined);
   const [lastTranscript, setLastTranscript] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
@@ -46,6 +47,7 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
         }
         const resultUri = await recorder.stopRecorder();
         recorder.removeRecordBackListener();
+        setMetering(undefined);
         setIsRecording(false);
         setStatusMessage('Processing speech…');
 
@@ -63,6 +65,7 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
         }
       } catch (err: any) {
         setIsRecording(false);
+        setMetering(undefined);
         setStatusMessage(null);
         Alert.alert('Recording error', err?.message ?? 'Could not stop recording');
       }
@@ -80,13 +83,19 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
         setLastTranscript(null);
         setStatusMessage('Recording… Tap mic again to stop');
         setRecordSecs(0);
-        await recorder.startRecorder();
+        await recorder.startRecorder(undefined, undefined, true);
+        recorder.addRecordBackListener((e: any) => {
+          if (e?.currentMetering !== undefined) {
+            setMetering(e.currentMetering);
+          }
+        });
         setIsRecording(true);
         timerRef.current = setInterval(() => {
           setRecordSecs(s => s + 1);
         }, 1000);
       } catch (err: any) {
         setIsRecording(false);
+        setMetering(undefined);
         setStatusMessage(null);
         Alert.alert('Recording error', err?.message ?? 'Could not start recording');
       }
@@ -130,7 +139,11 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
 
         {/* Mic + Waveform */}
         <View style={styles.centerSection}>
-          <MicrophoneButton onPress={handleMicPress} />
+          <MicrophoneButton
+            onPress={handleMicPress}
+            isRecording={isRecording}
+            metering={metering}
+          />
           <View style={styles.waveformWrapper}>
             <VoiceWaveform />
           </View>
