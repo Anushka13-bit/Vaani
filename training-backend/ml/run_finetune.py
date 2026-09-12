@@ -9,6 +9,7 @@ import hashlib
 import json
 import logging
 import os
+import random
 import shutil
 import uuid
 from datetime import datetime, timezone
@@ -100,6 +101,41 @@ def _load_calibration_pairs(session_id: str) -> list[tuple[Path, str]]:
         return pairs
     finally:
         db.close()
+
+
+def _split_holdout(
+    pairs: list[tuple[Path, str]],
+    fraction: float,
+    min_train: int = 3,
+) -> tuple[list[tuple[Path, str]], list[tuple[Path, str]]]:
+    """
+    Reserve a slice of the calibration set for evaluation.
+
+    Training on every sample leaves nothing to measure against, so a new adapter
+    can only be described as different, never as better. The split is seeded on
+    the sample paths so re-running a session evaluates on the same clips and two
+    runs stay comparable.
+    """
+    if fraction <= 0 or len(pairs) < min_train + 2:
+        return pairs, []
+    ordered = sorted(pairs, key=lambda pr: str(pr[0]))
+    rng = random.Random(hashlib.sha256("".join(str(p) for p, _ in ordered).encode()).hexdigest())
+    shuffled = ordered[:]
+    rng.shuffle(shuffled)
+    n_hold = max(1, min(int(round(len(shuffled) * fraction)), len(shuffled) - min_train))
+    return shuffled[n_hold:], shuffled[:n_hold]
+
+
+def _write_eval_manifest(holdout: list[tuple[Path, str]], work_dir: Path) -> Path | None:
+    """Write the held-out clips in the shape evaluate_adapter.py consumes."""
+    if not holdout:
+        return None
+    path = work_dir / "holdout.json"
+    path.write_text(json.dumps(
+        [{"audio_path": str(p), "reference": t} for p, t in holdout], indent=2
+    ))
+    logger.info("Held out %d sample(s) for evaluation -> %s", len(holdout), path)
+    return path
 
 
 def _train_user_lora(
@@ -420,9 +456,16 @@ def run_finetune(session_id: str, user_id: str, job_id: str | None = None) -> di
             shutil.rmtree(work_dir)
         work_dir.mkdir(parents=True)
 
-        write_status(session_id, status="training", message=f"Fine-tuning on {len(pairs)} samples")
+        train_pairs, holdout_pairs = _split_holdout(pairs, settings.EVAL_HOLDOUT_FRACTION)
+        _write_eval_manifest(holdout_pairs, work_dir)
+
+        write_status(
+            session_id,
+            status="training",
+            message=f"Fine-tuning on {len(train_pairs)} samples ({len(holdout_pairs)} held out for evaluation)",
+        )
         lora_dir = _train_user_lora(
-            pairs,
+            train_pairs,
             warm_start_dir=warm_start,
             output_dir=work_dir,
             base_model=settings.WHISPER_BASE_MODEL,

@@ -43,6 +43,14 @@ class Settings(BaseSettings):
     # Must match the model your LoRA adapters were trained against.
     WHISPER_BASE_MODEL: str = "openai/whisper-small"
 
+    # Fraction of calibration samples reserved for measuring the adapter rather
+    # than training it. Without a held-out slice a new adapter can only be shown
+    # to be different, not better. 0 disables evaluation entirely.
+    EVAL_HOLDOUT_FRACTION: float = float(os.getenv("EVAL_HOLDOUT_FRACTION", "0.2"))
+
+    # Absolute WER reduction a candidate must achieve before it is promoted.
+    MIN_WER_IMPROVEMENT: float = float(os.getenv("MIN_WER_IMPROVEMENT", "0.0"))
+
     # Flat global TORGO adapter used as warm-start for per-user fine-tune (TORGO English).
     # Not cluster-selected — this mirror of abnerh/TORGO-database has no severity/speaker
     # labels, so there is only ever one global adapter here.
