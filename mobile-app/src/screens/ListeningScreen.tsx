@@ -114,7 +114,7 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
   const getSubtitle = () => {
     if (isRecording) return 'Speak now • Tap mic again to stop';
     if (statusMessage) return statusMessage;
-    if (wakeWordListening) return 'Say "Hey Lily" or tap the mic';
+    if (wakeWordListening) return 'Say "Hey Barfi" or tap the mic';
     return 'Tap the mic to speak';
   };
 

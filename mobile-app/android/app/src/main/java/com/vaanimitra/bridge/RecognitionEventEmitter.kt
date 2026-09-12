@@ -71,7 +71,7 @@ class RecognitionEventEmitter(private val reactContext: ReactApplicationContext)
 
     /**
      * Fired when the wake word engine triggers (before mic is handed to VoicePipeline).
-     * @param modelName  e.g. "Hey Lily" or "Hey Jarvis"
+     * @param modelName  e.g. "Hey Barfi" or "Hey Jarvis"
      * @param score      Raw detection confidence from openWakeWord (0.0–1.0)
      */
     fun emitWakeWordDetected(modelName: String, score: Float) {

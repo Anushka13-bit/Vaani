@@ -12,9 +12,9 @@ echo "Downloading openWakeWord models to $ASSETS_DIR ..."
 curl -fsSL "$BASE_URL/melspectrogram.onnx" -o "$ASSETS_DIR/melspectrogram.onnx"
 curl -fsSL "$BASE_URL/embedding_model.onnx" -o "$ASSETS_DIR/embedding_model.onnx"
 
-# Dev fallback until you train hey_lily.onnx (see mobile-app/android/app/src/main/assets/README_WAKEWORD.md)
-if [[ ! -f "$ASSETS_DIR/hey_lily.onnx" ]]; then
-  echo "Downloading hey_jarvis_v0.1.onnx as temporary fallback (replace with hey_lily.onnx after training)"
+# Dev fallback until you train hey_barfi.onnx (see mobile-app/android/app/src/main/assets/README_WAKEWORD.md)
+if [[ ! -f "$ASSETS_DIR/hey_barfi.onnx" ]]; then
+  echo "Downloading hey_jarvis_v0.1.onnx as temporary fallback (replace with hey_barfi.onnx after training)"
   curl -fsSL "$BASE_URL/hey_jarvis_v0.1.onnx" -o "$ASSETS_DIR/hey_jarvis_v0.1.onnx"
 fi
 

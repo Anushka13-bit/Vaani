@@ -110,7 +110,7 @@
             Per spec §7: this service only reads/acts on UI view hierarchy.
             It does NOT access audio, camera, or screen pixels.
         -->
-        <!-- Wake word foreground listener (openWakeWord ONNX — "Hey Lily") -->
+        <!-- Wake word foreground listener (openWakeWord ONNX — "Hey Barfi") -->
         <service
             android:name=".wakeword.WakeWordForegroundService"
             android:exported="false"

@@ -85,7 +85,7 @@ export default function SettingsScreen({navigation}: any) {
       if (!hasPermissions) {
         Alert.alert(
           'Permissions Required',
-          'Microphone and Notification permissions are required to activate "Hey Lily" wake word listening.',
+          'Microphone and Notification permissions are required to activate "Hey Barfi" wake word listening.',
         );
         setWakeWordEnabled(false);
         setWakeWordListening(false);
@@ -211,14 +211,14 @@ export default function SettingsScreen({navigation}: any) {
           subtitle={preferredLanguage.toUpperCase()}
         />
 
-        {/* Hey Lily Wake Word */}
-        <Text style={styles.sectionHeader}>Hey Lily (Wake Word)</Text>
+        {/* Hey Barfi Wake Word */}
+        <Text style={styles.sectionHeader}>Hey Barfi (Wake Word)</Text>
         <View style={styles.card}>
           <View style={styles.rowBetween}>
             <View style={styles.rowLabel}>
-              <Text style={styles.cardTitle}>Listen for "Hey Lily"</Text>
+              <Text style={styles.cardTitle}>Listen for "Hey Barfi"</Text>
               <Text style={styles.cardSub}>
-                Hands-free voice commands. Dev builds use "Hey Jarvis" until hey_lily.onnx is trained.
+                Hands-free voice commands. Dev builds use "Hey Jarvis" until hey_barfi.onnx is trained.
               </Text>
             </View>
             <Switch
@@ -246,7 +246,7 @@ export default function SettingsScreen({navigation}: any) {
                     : styles.statusTextInactive,
                 ]}>
                 {wakeWordListening
-                  ? 'Listening for "Hey Jarvis" / "Hey Lily"'
+                  ? 'Listening for "Hey Jarvis" / "Hey Barfi"'
                   : 'Service stopped'}
               </Text>
             </View>
@@ -297,7 +297,7 @@ export default function SettingsScreen({navigation}: any) {
         <Text style={styles.sectionHeader}>Voice Activation</Text>
         <View style={styles.card}>
           <Text style={styles.cardSub}>
-            <Text style={styles.bold}>Primary: </Text>Say "Hey Lily", then your command (e.g. call Ravi).
+            <Text style={styles.bold}>Primary: </Text>Say "Hey Barfi", then your command (e.g. call Ravi).
           </Text>
           <Text style={[styles.cardSub, {marginTop: 8}]}>
             <Text style={styles.bold}>Fallback: </Text>Set VaaniMitra as system voice input and use the keyboard mic.

@@ -53,7 +53,7 @@ Mainstream voice assistants have documented failure rates on dysarthric speech. 
 - 🔁 **Active correction loop** — user corrections can sync to the backend for future retraining (opt-in)
 - 👨‍👩‍👧 **Caregiver mode** — PIN-gated screen to review transcripts and manage the phrasebook
 - 🔊 **AAC-lite speak-back** — TTS confirmation before irreversible actions (send/call)
-- 🎤 **Hands-free wake word** — openWakeWord foreground service ("Hey Lily"; dev fallback: "Hey Jarvis")
+- 🎤 **Hands-free wake word** — openWakeWord foreground service ("Hey Barfi"; dev fallback: "Hey Jarvis")
 - 📱 **System-wide integration** — works inside every app's keyboard mic, not just inside VaaniMitra
 
 ---
@@ -125,9 +125,9 @@ At inference the device loads **one merged ONNX bundle** per adapter — not sta
 
 | Mode | How it works |
 |---|---|
-| **Hands-free (primary)** | Toggle "Listen for Hey Lily" in Settings → `WakeWordForegroundService` runs in foreground → vibrate on wake → `VoicePipeline` captures command → ONNX Whisper → intent → TTS-gated action |
+| **Hands-free (primary)** | Enabled automatically on first launch (toggle in Settings under "Listen for Hey Barfi") → `WakeWordForegroundService` runs in foreground → vibrate on wake → `VoicePipeline` captures command → ONNX Whisper → intent → TTS-gated action |
 | **System dictation (fallback)** | Set VaaniMitra as default voice input → tap the keyboard mic in any app → `PersonalizedRecognitionService` |
-| **Dev wake phrase** | Until `hey_lily.onnx` is trained, the app falls back to **"Hey Jarvis"** (`hey_jarvis_v0.1.onnx`) |
+| **Dev wake phrase** | Until `hey_barfi.onnx` is trained, the app falls back to **"Hey Jarvis"** (`hey_jarvis_v0.1.onnx`) |
 
 Wake word runs on **CPU** (openWakeWord ONNX). Whisper runs on **NNAPI** with CPU fallback.
 
@@ -139,7 +139,7 @@ Wake word runs on **CPU** (openWakeWord ONNX). Whisper runs on **NNAPI** with CP
 
 ```mermaid
 flowchart LR
-    A["Hey Lily / Hey Jarvis"] --> B[WakeWordForegroundService]
+    A["Hey Barfi / Hey Jarvis"] --> B[WakeWordForegroundService]
     B --> C[Vibrate + VoicePipeline]
     C --> D[Mic + VAD capture]
     D --> E{ONNX bundle loaded?}
@@ -319,7 +319,7 @@ chmod +x scripts/download_wakeword_models.sh
 ```
 </details>
 
-Downloads `melspectrogram.onnx`, `embedding_model.onnx`, and `hey_jarvis_v0.1.onnx` into `mobile-app/android/app/src/main/assets/` (gitignored). Train custom `hey_lily.onnx` per `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`.
+Downloads `melspectrogram.onnx`, `embedding_model.onnx`, and `hey_jarvis_v0.1.onnx` into `mobile-app/android/app/src/main/assets/` (gitignored). Train custom `hey_barfi.onnx` per `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`.
 
 ### 4. sherpa-onnx Android AAR (one-time after clone)
 
@@ -347,7 +347,7 @@ npm run android
 
 **On device:**
 1. Complete calibration or Settings → download voice model
-2. Enable **Listen for Hey Lily** (or say **Hey Jarvis** until custom model is trained)
+2. Wake word listening starts automatically — say **"Hey Barfi"** (or **"Hey Jarvis"** until the custom model is trained); toggle it off in Settings if you prefer tap-to-talk
 3. Optional fallback: **Settings → Languages & input → Voice input → VaaniMitra**
 
 **If Android build fails** with `rn_edit_text_material 2.xml`, clean macOS duplicate artifacts:
@@ -365,7 +365,7 @@ cd mobile-app/android && ./gradlew clean
 | Area | Status |
 |---|---|
 | On-device Whisper (sherpa-onnx) | ✅ `SherpaOnnxWhisperRuntime` — KV-cache encoder/decoder, NNAPI-requested → CPU fallback |
-| Wake word (openWakeWord) | ✅ Implemented; custom `hey_lily.onnx` still to be trained |
+| Wake word (openWakeWord) | ✅ Implemented; custom `hey_barfi.onnx` still to be trained |
 | System-wide dictation | ✅ `PersonalizedRecognitionService` |
 | Calibration sample upload | ✅ Multipart to local FastAPI |
 | Live per-user LoRA training | ✅ `run_finetune.py` — TORGO warm-start, encoder frozen, decoder LoRA r=4 |

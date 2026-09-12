@@ -19,7 +19,7 @@ from pathlib import Path
 
 BASE_URL = "https://github.com/dscripka/openWakeWord/releases/download/v0.5.1"
 REQUIRED = ["melspectrogram.onnx", "embedding_model.onnx"]
-# Dev fallback until hey_lily.onnx is trained — see assets/README_WAKEWORD.md
+# Dev fallback until hey_barfi.onnx is trained — see assets/README_WAKEWORD.md
 FALLBACK = "hey_jarvis_v0.1.onnx"
 
 
@@ -52,14 +52,14 @@ def main() -> None:
             continue
         download(f"{BASE_URL}/{name}", dest)
 
-    if (assets / "hey_lily.onnx").is_file():
-        print("  hey_lily.onnx present — skipping the hey_jarvis fallback")
+    if (assets / "hey_barfi.onnx").is_file():
+        print("  hey_barfi.onnx present — skipping the hey_jarvis fallback")
     else:
         dest = assets / FALLBACK
         if dest.is_file() and not args.force:
             print(f"  {FALLBACK} already present")
         else:
-            print(f"  hey_lily.onnx not trained yet — fetching {FALLBACK} as the wake word")
+            print(f"  hey_barfi.onnx not trained yet — fetching {FALLBACK} as the wake word")
             download(f"{BASE_URL}/{FALLBACK}", dest)
 
     print("\nDone:")

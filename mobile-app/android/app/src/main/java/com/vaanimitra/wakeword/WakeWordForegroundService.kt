@@ -35,7 +35,7 @@ import kotlinx.coroutines.launch
  * Required assets (see scripts/download_wakeword_models.sh):
  *   - melspectrogram.onnx
  *   - embedding_model.onnx
- *   - hey_lily.onnx  (custom) OR hey_jarvis_v0.1.onnx (dev fallback)
+ *   - hey_barfi.onnx  (custom) OR hey_jarvis_v0.1.onnx (dev fallback)
  *
  * Mic contention resolution:
  *   The WakeWordEngine holds AudioRecord continuously. When a detection fires, we call
@@ -120,7 +120,7 @@ class WakeWordForegroundService : Service() {
         }
 
         try {
-            val modelName = if (modelPath.contains("lily", ignoreCase = true)) "Hey Lily" else "Hey Jarvis"
+            val modelName = if (modelPath.contains("barfi", ignoreCase = true)) "Hey Barfi" else "Hey Jarvis"
             val model = WakeWordModel(
                 name = modelName,
                 modelPath = modelPath,
@@ -154,11 +154,11 @@ class WakeWordForegroundService : Service() {
         }
     }
 
-    /** Prefer custom hey_lily.onnx; fall back to hey_jarvis for dev until trained. */
+    /** Prefer custom hey_barfi.onnx; fall back to hey_jarvis for dev until trained. */
     private fun resolveWakeWordModel(): String? = when {
-        hasAsset("hey_lily.onnx") -> "hey_lily.onnx"
+        hasAsset("hey_barfi.onnx") -> "hey_barfi.onnx"
         hasAsset("hey_jarvis_v0.1.onnx") -> {
-            Log.w(TAG, "hey_lily.onnx not found — using hey_jarvis_v0.1.onnx as dev fallback")
+            Log.w(TAG, "hey_barfi.onnx not found — using hey_jarvis_v0.1.onnx as dev fallback")
             "hey_jarvis_v0.1.onnx"
         }
         else -> null
@@ -240,7 +240,7 @@ class WakeWordForegroundService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val modelLabel = if (resolveWakeWordModel()?.contains("lily", ignoreCase = true) == true) "Hey Lily" else "Hey Jarvis"
+        val modelLabel = if (resolveWakeWordModel()?.contains("barfi", ignoreCase = true) == true) "Hey Barfi" else "Hey Jarvis"
         val channel = NotificationChannel(
             CHANNEL_ID, "VaaniMitra Voice", NotificationManager.IMPORTANCE_LOW,
         ).apply { description = "Listening for \"$modelLabel\"" }

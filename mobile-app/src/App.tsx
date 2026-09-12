@@ -222,7 +222,7 @@ export default function App() {
             setWakeWordStopReason(reason);
             Alert.alert(
               'Permissions Required',
-              'VaaniMitra requires Microphone and Notification permissions for hands-free voice activation ("Hey Lily"). Please grant permissions in Settings to enable wake word listening.',
+              'VaaniMitra requires Microphone and Notification permissions for hands-free voice activation ("Hey Barfi"). Please grant permissions in Settings to enable wake word listening.',
             );
           }
         } else {

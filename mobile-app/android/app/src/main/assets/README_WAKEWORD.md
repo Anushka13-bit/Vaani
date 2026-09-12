@@ -1,4 +1,4 @@
-# Hey Lily wake word (openWakeWord — free, no API key)
+# Hey Barfi wake word (openWakeWord — free, no API key)
 
 Uses [openWakeWord](https://github.com/dscripka/openWakeWord) via ONNX on-device. **No Picovoice account needed.**
 
@@ -16,17 +16,17 @@ This downloads into this folder:
 - `embedding_model.onnx` (required)
 - `hey_jarvis_v0.1.onnx` (temporary fallback for testing)
 
-## Custom "Hey Lily" model
+## Custom "Hey Barfi" model
 
 Train with openWakeWord (Python):
 
 ```bash
 pip install openwakeword
 # Follow https://github.com/dscripka/openWakeWord#training-custom-models
-# Export → copy hey_lily.onnx here
+# Export → copy hey_barfi.onnx here
 ```
 
-Once `hey_lily.onnx` exists, the app prefers it over `hey_jarvis_v0.1.onnx`.
+Once `hey_barfi.onnx` exists, the app prefers it over `hey_jarvis_v0.1.onnx`.
 
 ## Notes
 
