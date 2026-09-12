@@ -29,10 +29,15 @@ This document describes the complete 7-step calibration pipeline for VaaniMitra,
    │          • 4 epochs, step-by-step loss logging
    │          • Status progression: "queued" → "training" → "exporting" → "ready" (or "failed")
    │
-   └─ Step 5: Convert for Mobile
-              • Optimum ONNX export (encoder_model.onnx, decoder_model.onnx)
-              • INT8 dynamic quantization (encoder_model_int8.onnx, decoder_model_int8.onnx)
-              • Packages mobile_manifest.json + tokenizer assets into mobile_bundle.zip
+   └─ Step 5: Convert for Mobile (sherpa-onnx)
+              • HF checkpoint (LoRA merged) converted in-memory to OpenAI Whisper
+                format (ml/hf_to_openai_whisper.py), since sherpa-onnx's exporter
+                only accepts that format
+              • sherpa-onnx KV-cache export (encoder.onnx, decoder.onnx, tokens.txt),
+                vendored from k2-fsa/sherpa-onnx in ml/sherpa_whisper_export/
+              • INT8 dynamic quantization (encoder.int8.onnx, decoder.int8.onnx)
+              • Packages mobile_manifest.json + tokens.txt into mobile_bundle.zip
+                (see docs/SHERPA_ONNX_CONTRACT.md for the full manifest schema)
    ▼
 [Phone (Client Retrieval & Inference)]
    │
@@ -43,8 +48,9 @@ This document describes the complete 7-step calibration pipeline for VaaniMitra,
    └─ Step 7: Load on Phone
               • AdapterManager extracts bundle to files/whisper_models/{adapter_id}/
               • Switches WhisperInferenceEngine.activeAdapterId
-              • Releases prior OnnxRuntimeHolder sessions
-              • Subsequent inference executes on Android NNAPI (NPU/GPU) execution provider
+              • Releases the prior cached sherpa-onnx OfflineRecognizer
+              • Subsequent inference runs via sherpa-onnx's OfflineRecognizer
+                (NNAPI requested, CPU fallback — see SherpaOnnxWhisperRuntime.kt)
 ```
 
 ---
@@ -71,8 +77,8 @@ If local training fails (e.g., laptop offline, network drop, missing weights, or
 - **Prerequisite for Fallback**: Ensure `ml/mobile_export/torgo_base_adapter_english_v1/mobile_bundle.zip` is built and present on the server so the cluster fallback bundle can be served.
 
 ### 3. Qualcomm QNN Context Binary vs Android NNAPI
-- **Current Mobile Runtime**: The Android app uses Microsoft ONNX Runtime Mobile with the **Android NNAPI Execution Provider** (`opts.addNnapi()`), which utilizes the device NPU and GPU acceleration on Android devices (Qualcomm Hexagon, MediaTek APU, Samsung NPU) with automatic CPU fallback.
-- **QNN Status**: Proprietary Qualcomm QNN context binary files (`.bin`/`.context` from Qualcomm Neural Processing SDK) require Qualcomm's proprietary target compilation toolchain tied to specific Snapdragon SoC revisions. The INT8 ONNX models exported by `export_whisper_mobile.py` are specifically matched to ONNX Runtime NNAPI on Android.
+- **Current Mobile Runtime**: The Android app runs Whisper inference via **sherpa-onnx**'s `OfflineRecognizer` (a prebuilt AAR, k2-fsa/sherpa-onnx, Apache 2.0 — see `docs/SHERPA_ONNX_CONTRACT.md`), which requests the **NNAPI** execution provider internally and falls back to CPU automatically on any device/model where NNAPI init fails.
+- **QNN Status**: Proprietary Qualcomm QNN context binary files (`.bin`/`.context` from Qualcomm Neural Processing SDK) require Qualcomm's proprietary target compilation toolchain tied to specific Snapdragon SoC revisions, and would require building sherpa-onnx from source against that SDK rather than using the prebuilt AAR. Out of scope for this pass — see `docs/QNN_INTEGRATION.md`.
 
 ---
 
@@ -84,6 +90,6 @@ If local training fails (e.g., laptop offline, network drop, missing weights, or
 | **2. Transfer Phone → Laptop** | `CalibrationScreen.tsx`, `trainingBackendClient.ts` | Per-sample multipart POST to `/v1/calibration/sessions/{id}/samples`, `DEFAULT_SAMPLE_COUNT=40` prompts per session (`prompt_set_id="torgo_en_v1"`), to configurable base URL (default `127.0.0.1:8000`). | **Implemented & Verified** |
 | **3. Receive on Laptop** | `app/routers/calibrate.py` | `POST /calibrate` receives clips + manifest, saves to `./sessions/{session_id}/`, returns 202 immediately via `BackgroundTasks`. | **Implemented & Verified** |
 | **4. Train Locally** | `ml/run_finetune.py`, `app/workers/train_worker.py` | `PYTORCH_ENABLE_MPS_FALLBACK=1`; `device = "mps"`; merges TORGO adapter; freezes encoder; LoRA r=4, alpha=8; logs step loss; writes `status.json`. | **Implemented & Verified** |
-| **5. Convert for Mobile** | `ml/export_whisper_mobile.py` | Exports ONNX, dynamic INT8 quantization matching TORGO, packages `mobile_bundle.zip` for NNAPI NPU acceleration. | **Implemented & Verified** |
+| **5. Convert for Mobile** | `ml/export_whisper_mobile.py`, `ml/hf_to_openai_whisper.py`, `ml/sherpa_whisper_export/` | Converts merged HF checkpoint to OpenAI format in-memory, exports sherpa-onnx KV-cache ONNX + tokens.txt, dynamic INT8 quantization, packages `mobile_bundle.zip`. | **Implemented & Verified** |
 | **6. Retrieve on Phone** | `app/routers/session_adapter.py`, `CalibrationScreen.tsx` | `GET /adapter/{session_id}/status` & `GET /adapter/{session_id}`; polling handles 404 gracefully; downloads only when "ready". | **Implemented & Verified** |
-| **7. Load on Phone** | `AdapterManager.kt`, `WhisperInferenceEngine.kt` | `loadOnnxAdapter` actively swaps `activeAdapterId` and clears `OnnxRuntimeHolder`, ensuring inference uses the new model on NNAPI. | **Implemented & Verified** |
+| **7. Load on Phone** | `AdapterManager.kt`, `WhisperInferenceEngine.kt` | `loadOnnxAdapter` actively swaps `activeAdapterId` and releases the cached `SherpaOnnxWhisperRuntime` recognizer, ensuring inference uses the new model on NNAPI-requested/CPU-fallback. | **Implemented & Verified** |

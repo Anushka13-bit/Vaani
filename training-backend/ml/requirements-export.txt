@@ -2,8 +2,11 @@ torch>=2.1.0
 torchaudio>=2.1.0
 transformers>=4.38.0
 peft>=0.10.0
-optimum[onnxruntime]>=1.17.0
 onnxruntime>=1.17.0
 onnx>=1.15.0
 safetensors>=0.4.0
 numpy>=1.24.0
+# Native OpenAI Whisper checkpoint format + KV-cache ONNX export logic vendored
+# from k2-fsa/sherpa-onnx (ml/sherpa_whisper_export/) both load models via
+# whisper.load_model(), which requires this package. Pulls in tiktoken.
+openai-whisper>=20231117

@@ -1,13 +1,17 @@
-# Mobile ONNX Setup (TORGO LoRA → Android)
+# Mobile sherpa-onnx Setup (TORGO LoRA → Android)
 
 Your trained LoRA weights in `ml/adapters/torgo_base_adapter_english_v1/` are **PEFT/safetensors**.
-The phone needs a **merged ONNX bundle** (LoRA baked in at export time).
+The phone needs a **sherpa-onnx KV-cache ONNX bundle** (LoRA baked in at export time).
+The on-device runtime is [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)
+(pinned tag in `docs/SHERPA_ONNX_CONTRACT.md`), not a hand-rolled ONNX Runtime
+pipeline — it does mel extraction, KV-cache greedy decoding, and tokenizer
+decode internally.
 
-## Step 1 — Export mobile bundle (one-time, on your Mac)
+## Step 1 — Export mobile bundle (one-time)
 
 ```bash
 cd training-backend
-python -m venv .venv-export && source .venv-export/bin/activate
+python -m venv .venv-export && source .venv-export/bin/activate   # Windows: .venv-export\Scripts\activate
 pip install -r ml/requirements-export.txt
 
 python ml/export_whisper_mobile.py \
@@ -20,13 +24,18 @@ python ml/export_whisper_mobile.py \
 This creates:
 ```
 ml/mobile_export/torgo_base_adapter_english_v1/
-  encoder_model_int8.onnx
-  decoder_model_int8.onnx
+  encoder.onnx / encoder.int8.onnx   # KV-cache single-step encoder graph
+  decoder.onnx / decoder.int8.onnx   # KV-cache single-step decoder graph
+  tokens.txt                         # openai-whisper's own BPE vocab (sherpa-onnx format)
   mobile_manifest.json
   mobile_bundle.zip    ← served by GET /v1/adapters/torgo_base_adapter_english_v1/mobile
 ```
 
 Check `mobile_manifest.json` → `sanity_check.outputs_differ` should be `true`.
+Note: sherpa-onnx's runtime reads its decode config (special-token ids, dims,
+etc.) from ONNX metadata embedded directly in `encoder.onnx`, not from
+`mobile_manifest.json` — see `docs/SHERPA_ONNX_CONTRACT.md` for the full list
+of embedded fields.
 
 ## Step 2 — Restart backend
 
@@ -50,14 +59,4 @@ cd mobile-app
 npm run android
 ```
 
-Complete calibration (or Settings → Download Voice Model). The app downloads `mobile_bundle.zip` and runs ONNX on **NNAPI** (NPU/GPU when available) with **CPU fallback**.
-
-## Execution providers
-
-| Provider | When |
-|----------|------|
-| NNAPI | Default attempt (uses device NPU/GPU via Android NNAPI) |
-| CPU | Fallback if NNAPI init fails |
-| Google STT | Fallback only if ONNX bundle not downloaded |
-
-True Qualcomm **QNN** context binaries are not wired in this pass — NNAPI is the Android-standard NPU path.
+Complete calibration (or Settings → Download Voice Model). The app downloads `mobile_bundle.zip` and runs it through sherpa-onnx's `OfflineRecognizer` on **NNAPI** (NPU/GPU when available) with **CPU fallback** — see `docs/SHERPA_ONNX_CONTRACT.md` for exactly which execution providers are wired and how failures fall back.

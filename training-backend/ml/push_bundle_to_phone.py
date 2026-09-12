@@ -94,22 +94,35 @@ def main() -> None:
         if not manifest_path.is_file():
             sys.exit("Bundle has no mobile_manifest.json — the app cannot load it.")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-        encoder, decoder = manifest.get("encoder_file"), manifest.get("decoder_file")
-        for label, name in (("encoder_file", encoder), ("decoder_file", decoder)):
+
+        # Old cacheless-ONNX bundles ("format": "onnx" or missing) are not
+        # sherpa-onnx-compatible — refuse rather than pushing something the
+        # rebuilt Android runtime can't load. See docs/SHERPA_ONNX_CONTRACT.md.
+        fmt = manifest.get("format")
+        if fmt != "sherpa-onnx-whisper-kv-cache":
+            sys.exit(
+                f"Bundle format={fmt!r} is not sherpa-onnx-compatible — refusing to install. "
+                "Re-run ml/export_whisper_mobile.py to produce a current bundle."
+            )
+
+        encoder, decoder, tokens = (
+            manifest.get("encoder_file"), manifest.get("decoder_file"), manifest.get("tokens_file"),
+        )
+        for label, name in (("encoder_file", encoder), ("decoder_file", decoder), ("tokens_file", tokens)):
             if not name or not (staged / name).is_file():
                 sys.exit(f"Manifest {label}={name!r} is missing from the bundle — refusing to install.")
 
         # Catch a corrupt export here rather than after pushing ~200MB, where it would
         # surface on-device as an opaque ORT_INVALID_PROTOBUF at inference time.
         checksums = manifest.get("checksums") or {}
-        for key, name in (("encoder", encoder), ("decoder", decoder)):
+        for key, name in (("encoder", encoder), ("decoder", decoder), ("tokens", tokens)):
             expected = checksums.get(key)
             if not expected:
                 continue
             digest = hashlib.sha256((staged / name).read_bytes()).hexdigest()
             if f"sha256:{digest}".lower() != str(expected).lower():
                 sys.exit(f"{name} failed checksum — bundle is corrupt. Re-run export_whisper_mobile.py.")
-        print(f"Manifest OK: encoder={encoder} decoder={decoder} (checksums verified)")
+        print(f"Manifest OK: encoder={encoder} decoder={decoder} tokens={tokens} (checksums verified)")
 
         dest = f"files/whisper_models/{args.install_as}"
         run(adb + ["shell", "rm", "-rf", DEVICE_TMP], check=False)
@@ -148,7 +161,7 @@ def main() -> None:
 
         listing = run(adb + ["shell", "run-as", PACKAGE, "ls", "-l", dest]).stdout
         print(f"\nInstalled at /data/data/{PACKAGE}/{dest}:\n{listing}")
-        for name in (encoder, decoder, "mobile_manifest.json"):
+        for name in (encoder, decoder, tokens, "mobile_manifest.json"):
             if name not in listing:
                 sys.exit(f"Verification failed: {name} not present on device after copy.")
 

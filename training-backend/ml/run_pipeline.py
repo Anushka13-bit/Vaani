@@ -177,7 +177,7 @@ def main() -> None:
 
     print("\n" + "=" * 70)
     print("Pipeline complete. Launch the app and say the wake word, then watch:")
-    print("  adb logcat -s VoicePipeline:V OnnxRuntimeHolder:V AndroidIntentActions:V")
+    print("  adb logcat -s VoicePipeline:V SherpaOnnxWhisperRuntime:V AndroidIntentActions:V")
     print("=" * 70)
 
 

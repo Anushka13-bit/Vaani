@@ -1,21 +1,33 @@
 #!/usr/bin/env python3
 """
-VaaniMitra — Export merged TORGO LoRA Whisper to a mobile ONNX bundle.
+VaaniMitra — Export merged TORGO LoRA Whisper to a sherpa-onnx mobile bundle.
 
 Usage (from training-backend/, with GPU optional):
   pip install -r ml/requirements-export.txt
   python ml/export_whisper_mobile.py \\
     --adapter-dir ml/adapters/torgo_base_adapter_english_v1 \\
-    --output-dir ml/mobile_export/torgo_base_adapter_english_v1
+    --output-dir ml/mobile_export/torgo_base_adapter_english_v1 \\
+    --quantize
 
 Produces:
   mobile_export/<adapter_id>/
-    encoder_model.onnx          # merged LoRA baked in
-    decoder_model.onnx
-    encoder_model_int8.onnx     # optional quantized
-    decoder_model_int8.onnx
-    mobile_manifest.json        # checksums, shapes, WER sanity report
+    encoder.onnx                # merged LoRA baked in, KV-cache single-step graph
+    decoder.onnx
+    encoder.int8.onnx           # emitted when --quantize is passed
+    decoder.int8.onnx
+    tokens.txt                  # openai-whisper's own BPE vocab, sherpa-onnx line format
+    mobile_manifest.json        # checksums, format tag, WER sanity report
     mobile_bundle.zip           # what the Android app downloads
+
+The on-device runtime is sherpa-onnx (k2-fsa/sherpa-onnx), not a hand-rolled
+ONNX Runtime pipeline. The exact tensor names/shapes, ONNX metadata schema,
+tokens.txt format, and quantization args are vendored from sherpa-onnx's own
+`scripts/whisper/export-onnx.py` into `ml/sherpa_whisper_export/` — see that
+package and `docs/SHERPA_ONNX_CONTRACT.md` for the pinned version and the
+full list of confirmed-vs-assumed facts. Because that exporter only accepts
+models in the native `openai-whisper` checkpoint format, `ml/hf_to_openai_whisper.py`
+converts our merged HF checkpoint (LoRA folded in via `peft.merge_and_unload()`)
+in memory first — no intermediate files, no `optimum` ONNX export involved.
 """
 from __future__ import annotations
 
@@ -24,12 +36,18 @@ import hashlib
 import json
 import logging
 import shutil
-import tempfile
 import zipfile
 from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
+
+# Pinned sherpa-onnx release tag — must match the AAR the Android side bundles
+# and the export-onnx.py revision vendored into ml/sherpa_whisper_export/.
+# See docs/SHERPA_ONNX_CONTRACT.md for why this tag was chosen.
+SHERPA_ONNX_VERSION = "1.13.8"
+
+BUNDLE_FORMAT = "sherpa-onnx-whisper-kv-cache"
 
 
 def sha256_file(path: Path) -> str:
@@ -41,7 +59,6 @@ def sha256_file(path: Path) -> str:
 
 
 def load_merged_model(adapter_dir: Path, base_model: str):
-    import torch
     from peft import PeftModel
     from transformers import WhisperForConditionalGeneration
 
@@ -61,87 +78,51 @@ def load_merged_model(adapter_dir: Path, base_model: str):
     return model
 
 
-def export_onnx(model, output_dir: Path) -> tuple[Path, Path]:
-    # main_export (not export) is the entry point that takes a checkpoint path, a task
-    # and splits an encoder-decoder model into separate ONNX graphs. The low-level
-    # export() takes (model, OnnxConfig, output) and has no model_name_or_path/task.
-    from optimum.exporters.onnx import main_export
-    from transformers import WhisperProcessor
+def _sherpa_model_type(base_model: str) -> str:
+    """
+    Derive sherpa-onnx's `model_type` ONNX-metadata tag (e.g. "whisper-small")
+    from the HF base model id, instead of hardcoding a whisper-small literal —
+    this stays correct if the base model changes to medium/large-v3/etc.
+    """
+    slug = base_model.rsplit("/", 1)[-1]
+    name = slug[len("whisper-"):] if slug.startswith("whisper-") else slug
+    return f"whisper-{name}"
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    processor = WhisperProcessor.from_pretrained(model.config._name_or_path)
 
-    # The on-device decoder loop (OnnxRuntimeHolder.runDecoderStep) feeds exactly
-    # input_ids + encoder_hidden_states. A KV-cache export additionally demands
-    # past_key_values.* / use_cache_branch inputs, which ORT would reject at runtime
-    # on the phone — so export the cacheless variant.
-    model.config.use_cache = False
-    if getattr(model, "generation_config", None) is not None:
-        model.generation_config.use_cache = False
+def export_sherpa_onnx(model, output_dir: Path, base_model: str, quantize: bool) -> dict[str, Path]:
+    """
+    Merged HF Whisper -> OpenAI Whisper checkpoint format -> sherpa-onnx
+    KV-cache encoder/decoder ONNX graphs + tokens.txt.
 
-    with tempfile.TemporaryDirectory() as tmp:
-        checkpoint = Path(tmp) / "merged"
-        model.save_pretrained(checkpoint)
-        processor.save_pretrained(checkpoint)
+    This replaces the old `optimum.exporters.onnx.main_export` cacheless
+    export entirely — sherpa-onnx's C++ runtime does its own greedy KV-cache
+    decode loop and expects this specific graph shape, which `optimum` cannot
+    produce.
+    """
+    from ml.hf_to_openai_whisper import convert_hf_to_openai_whisper
+    from ml.sherpa_whisper_export import export_whisper_onnx
 
-        logger.info("Exporting ONNX via optimum main_export → %s", output_dir)
-        main_export(
-            model_name_or_path=str(checkpoint),
-            output=output_dir,
-            task="automatic-speech-recognition",
-            no_post_process=True,  # skip decoder_model_merged.onnx (needs use_cache_branch)
-        )
+    logger.info("Converting merged HF model -> OpenAI Whisper checkpoint format")
+    openai_model = convert_hf_to_openai_whisper(model)
 
-    # optimum may nest outputs in an onnx/ subfolder depending on version
-    alt = output_dir / "onnx"
-    if alt.is_dir():
-        for f in alt.glob("*.onnx*"):
-            shutil.move(str(f), str(output_dir / f.name))
-
-    encoder = output_dir / "encoder_model.onnx"
-    if not encoder.is_file():
-        raise FileNotFoundError(f"ONNX export produced no encoder_model.onnx in {output_dir}")
-
-    # Prefer the plain cacheless decoder; fall back to whatever decoder graph exists
-    # so a version change surfaces as a clear name rather than a missing-file error.
-    decoder = next(
-        (
-            output_dir / name
-            for name in ("decoder_model.onnx", "decoder_model_merged.onnx")
-            if (output_dir / name).is_file()
-        ),
-        None,
+    logger.info("Exporting sherpa-onnx KV-cache ONNX graphs -> %s", output_dir)
+    return export_whisper_onnx(
+        openai_model,
+        output_dir,
+        model_type=_sherpa_model_type(base_model),
+        quantize=quantize,
     )
-    if decoder is None:
-        produced = sorted(p.name for p in output_dir.glob("*.onnx"))
-        raise FileNotFoundError(f"ONNX export produced no decoder graph. Got: {produced}")
-    logger.info("ONNX export produced encoder=%s decoder=%s", encoder.name, decoder.name)
-
-    # Save processor artifacts for mobile tokenizer ids
-    processor.save_pretrained(output_dir)
-    return encoder, decoder
-
-
-def quantize_dynamic(src: Path, dst: Path) -> Path:
-    from onnxruntime.quantization import QuantType, quantize_dynamic
-
-    logger.info("Quantizing %s → %s", src.name, dst.name)
-    quantize_dynamic(
-        model_input=str(src),
-        model_output=str(dst),
-        weight_type=QuantType.QUInt8,
-    )
-    return dst
 
 
 def wer_sanity_check(base_model_id: str, merged_model, sample_wav: Path | None) -> dict:
-    """Optional WER regression on a short sample."""
+    """Optional WER regression on a short sample — unaffected by the export
+    format change, since it compares HF `.generate()` output before/after
+    merging LoRA, not anything ONNX-related."""
     if sample_wav is None or not sample_wav.exists():
         return {"skipped": True, "reason": "no sample wav provided"}
 
     import torch
     import torchaudio
-    from peft import PeftModel
     from transformers import WhisperForConditionalGeneration, WhisperProcessor
 
     processor = WhisperProcessor.from_pretrained(base_model_id)
@@ -195,85 +176,53 @@ def wer_sanity_check(base_model_id: str, merged_model, sample_wav: Path | None) 
     }
 
 
-def describe_model(model, base_model: str) -> dict:
+def describe_bundle(model, base_model: str, adapter_manifest: dict) -> dict:
     """
-    Derive the runtime contract from the checkpoint rather than assuming Whisper-small.
-
-    These values were hardcoded both here and in the Android code, so a model with
-    different dimensions (large-v3 uses 128 mel bins) or different special-token ids
-    would have been mis-tagged in the manifest and silently decoded as garbage on
-    device. Everything the phone needs to run the graph is read from the model and
-    its feature extractor.
+    Derive the sherpa-onnx manifest's language/task/sample_rate/n_mels fields
+    from the actual processor/config and the adapter's own manifest — never
+    hardcoded literals duplicated between backend and Android. The rest of
+    the runtime contract (special-token ids, decode strategy, dims) now lives
+    as ONNX metadata embedded directly in encoder.onnx by
+    ml/sherpa_whisper_export/export.py, since that's what sherpa-onnx's C++
+    runtime actually reads at load time — not this JSON file.
     """
     from transformers import WhisperProcessor
 
     processor = WhisperProcessor.from_pretrained(base_model)
     fe = processor.feature_extractor
-    cfg = model.config
+    tok = processor.tokenizer
     gen = getattr(model, "generation_config", None)
 
-    def pick(*candidates, default=None):
-        for value in candidates:
-            if value is not None:
-                return value
-        return default
+    task = "transcribe"
+    forced = list(getattr(gen, "forced_decoder_ids", None) or [])
+    for _, token_id in forced:
+        if token_id is None:
+            continue
+        piece = tok.convert_ids_to_tokens(token_id)
+        if piece in ("<|transcribe|>", "<|translate|>"):
+            task = piece.strip("<|>")
+            break
 
-    n_samples = pick(getattr(fe, "n_samples", None), default=480000)
-    hop = pick(getattr(fe, "hop_length", None), default=160)
-    tok = processor.tokenizer
-
-    def token_id(piece: str, fallback: int | None = None) -> int | None:
-        try:
-            ids = tok.convert_tokens_to_ids(piece)
-            if isinstance(ids, int) and ids >= 0:
-                return ids
-        except Exception:
-            pass
-        return fallback
+    language = adapter_manifest.get("language_code") or "en"
 
     return {
-        "architecture": "whisper-encoder-decoder",
-        "sample_rate": int(pick(getattr(fe, "sampling_rate", None), default=16000)),
-        "n_mels": int(pick(getattr(fe, "feature_size", None), getattr(cfg, "num_mel_bins", None), default=80)),
-        "n_fft": int(pick(getattr(fe, "n_fft", None), default=400)),
-        "hop_length": int(hop),
-        "n_frames": int(n_samples // hop),
-        "mel_scale": "slaney",
-        "log_normalization": {"type": "whisper", "clip_db": 8.0, "offset": 4.0, "divisor": 4.0},
-        "vocab_size": int(getattr(cfg, "vocab_size", 0)) or None,
-        "decoder_kv_cache": bool(getattr(cfg, "use_cache", False)),
-        "io_names": {
-            "encoder_input": "input_features",
-            "encoder_output": "last_hidden_state",
-            "decoder_input_ids": "input_ids",
-            "decoder_encoder_hidden": "encoder_hidden_states",
-        },
-        "tokenizer": {"format": "hf_tokenizer_json", "byte_level_bpe": True},
-        "decoding": {
-            "strategy": "greedy",
-            "max_new_tokens": int(pick(getattr(gen, "max_length", None), default=128)),
-            "prompt_token_ids": [
-                t for t in (
-                    token_id("<|startoftranscript|>", 50258),
-                    token_id("<|en|>", 50259),
-                    token_id("<|transcribe|>", 50359),
-                    token_id("<|notimestamps|>", 50363),
-                ) if t is not None
-            ],
-            "eot_token_id": token_id("<|endoftext|>", 50257),
-        },
+        "language": language,
+        "task": task,
+        "sample_rate": int(fe.sampling_rate),
+        "n_mels": int(fe.feature_size),
     }
 
 
-def build_bundle(output_dir: Path, adapter_id: str, use_int8: bool) -> Path:
-    # Ship only the precision the manifest actually points at. Bundling the fp32
-    # graphs alongside the int8 ones tripled the download (~900MB vs ~250MB) with
-    # files the phone never opens.
-    files = ["mobile_manifest.json", "tokenizer.json", "preprocessor_config.json"]
+def build_bundle(output_dir: Path, use_int8: bool) -> Path:
+    # Ship only the precision the manifest actually points at, plus tokens.txt
+    # (required by sherpa-onnx's tokenizer) and the manifest itself. No HF
+    # tokenizer/preprocessor JSON — sherpa-onnx needs neither; tokenization and
+    # feature extraction happen inside its own C++ runtime.
+    files = ["mobile_manifest.json", "tokens.txt"]
     if use_int8:
-        files.extend(["encoder_model_int8.onnx", "decoder_model_int8.onnx"])
+        files.extend(["encoder.int8.onnx", "decoder.int8.onnx"])
     else:
-        files.extend(["encoder_model.onnx", "decoder_model.onnx"])
+        files.extend(["encoder.onnx", "decoder.onnx"])
 
     zip_path = output_dir / "mobile_bundle.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
@@ -285,8 +234,66 @@ def build_bundle(output_dir: Path, adapter_id: str, use_int8: bool) -> Path:
     return zip_path
 
 
+def export_mobile_bundle(
+    adapter_dir: Path,
+    output_dir: Path,
+    base_model: str,
+    adapter_id: str,
+    quantize: bool,
+    sample_wav: Path | None = None,
+) -> Path:
+    """
+    Full pipeline shared by the CLI (`__main__` below) and the live
+    per-user-calibration path (`run_finetune._export_mobile_bundle`), so the
+    two can't drift into producing different bundle shapes.
+    """
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True)
+
+    adapter_manifest = json.loads((adapter_dir / "adapter_manifest.json").read_text(encoding="utf-8"))
+
+    merged = load_merged_model(adapter_dir, base_model)
+    produced = export_sherpa_onnx(merged, output_dir, base_model, quantize)
+
+    sanity = wer_sanity_check(base_model, merged, sample_wav)
+
+    encoder = produced.get("encoder_int8") if quantize else produced["encoder"]
+    decoder = produced.get("decoder_int8") if quantize else produced["decoder"]
+    tokens = produced["tokens"]
+
+    manifest = {
+        "adapter_id": adapter_id,
+        "base_model": base_model,
+        "format": BUNDLE_FORMAT,
+        "sherpa_onnx_version": SHERPA_ONNX_VERSION,
+        "merged_lora": True,
+        "quantized": bool(quantize),
+        "encoder_file": encoder.name,
+        "decoder_file": decoder.name,
+        "tokens_file": tokens.name,
+        **describe_bundle(merged, base_model, adapter_manifest),
+        "checksums": {
+            "encoder": sha256_file(encoder),
+            "decoder": sha256_file(decoder),
+            "tokens": sha256_file(tokens),
+        },
+        "sanity_check": sanity,
+    }
+    (output_dir / "mobile_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
+
+    build_bundle(output_dir, use_int8=quantize)
+
+    if sanity.get("outputs_differ"):
+        logger.info("Sanity OK: merged model output differs from base-only")
+    elif not sanity.get("skipped"):
+        logger.warning("Sanity WARNING: merged output identical to base — verify LoRA was applied")
+
+    return output_dir / "mobile_bundle.zip"
+
+
 def main() -> None:
-    parser = argparse.ArgumentParser(description="Export TORGO LoRA Whisper for mobile ONNX")
+    parser = argparse.ArgumentParser(description="Export TORGO LoRA Whisper for sherpa-onnx mobile bundle")
     parser.add_argument("--adapter-dir", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--base-model", default="openai/whisper-small")
@@ -300,59 +307,21 @@ def main() -> None:
         (adapter_dir / "adapter_manifest.json").read_text(encoding="utf-8")
     )["adapter_id"]
     output_dir = (args.output_dir or Path("ml/mobile_export") / adapter_id).resolve()
-    if output_dir.exists():
-        shutil.rmtree(output_dir)
-    output_dir.mkdir(parents=True)
 
-    merged = load_merged_model(adapter_dir, args.base_model)
-    encoder, decoder = export_onnx(merged, output_dir)
-
-    # Copy tokenizer assets from adapter dir if export did not emit them
-    for name in ("tokenizer.json", "tokenizer_config.json", "preprocessor_config.json"):
-        src = adapter_dir / name
-        if src.is_file() and not (output_dir / name).exists():
-            shutil.copy2(src, output_dir / name)
-
-    int8_paths = {}
-    if args.quantize:
-        int8_paths["encoder"] = quantize_dynamic(
-            encoder, output_dir / "encoder_model_int8.onnx"
-        )
-        int8_paths["decoder"] = quantize_dynamic(
-            decoder, output_dir / "decoder_model_int8.onnx"
-        )
-
-    sanity = wer_sanity_check(args.base_model, merged, args.sample_wav)
-
-    enc_file = "encoder_model_int8.onnx" if args.quantize else "encoder_model.onnx"
-    dec_file = "decoder_model_int8.onnx" if args.quantize else "decoder_model.onnx"
-    manifest = {
-        "adapter_id": adapter_id,
-        "base_model": args.base_model,
-        "format": "onnx",
-        "merged_lora": True,
-        "encoder_file": enc_file,
-        "decoder_file": dec_file,
-        **describe_model(merged, args.base_model),
-        "checksums": {
-            "encoder": sha256_file(int8_paths.get("encoder", encoder)),
-            "decoder": sha256_file(int8_paths.get("decoder", decoder)),
-        },
-        "sanity_check": sanity,
-    }
-    (output_dir / "mobile_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-
-    build_bundle(output_dir, adapter_id, args.quantize)
+    zip_path = export_mobile_bundle(
+        adapter_dir=adapter_dir,
+        output_dir=output_dir,
+        base_model=args.base_model,
+        adapter_id=adapter_id,
+        quantize=args.quantize,
+        sample_wav=args.sample_wav,
+    )
     logger.info(
-        "Done — bundle written to disk on THIS machine. Nothing has been sent to the phone yet; "
+        "Done — bundle written to disk on THIS machine: %s. Nothing has been sent to the phone yet; "
         "the phone must pull it from GET /v1/adapters/%s/mobile "
         "(Settings -> Download Voice Model, or the calibration polling flow).",
-        adapter_id,
+        zip_path, adapter_id,
     )
-    if sanity.get("outputs_differ"):
-        logger.info("Sanity OK: merged model output differs from base-only")
-    elif not sanity.get("skipped"):
-        logger.warning("Sanity WARNING: merged output identical to base — verify LoRA was applied")
 
 
 if __name__ == "__main__":

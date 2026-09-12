@@ -390,57 +390,23 @@ def _train_user_lora(
 
 
 def _export_mobile_bundle(adapter_dir: Path, adapter_id: str) -> Path:
-    from ml.export_whisper_mobile import (
-        build_bundle,
-        describe_model,
-        export_onnx,
-        load_merged_model,
-        quantize_dynamic,
-        sha256_file,
-    )
+    # This used to be its own hand-rolled copy of the export steps (optimum
+    # cacheless ONNX export + manual manifest assembly), which had already
+    # drifted from the CLI path once (a live export shipped a manifest missing
+    # half the runtime contract because describe_model() lived only in
+    # export_whisper_mobile.py's CLI flow). Calling the same
+    # export_mobile_bundle() the CLI uses means the live per-user-calibration
+    # path and `python ml/export_whisper_mobile.py` can no longer diverge.
+    from ml.export_whisper_mobile import export_mobile_bundle
 
     export_dir = settings.MOBILE_EXPORT_DIR / adapter_id
-    if export_dir.exists():
-        shutil.rmtree(export_dir)
-    export_dir.mkdir(parents=True)
-
-    merged = load_merged_model(adapter_dir, settings.WHISPER_BASE_MODEL)
-    encoder, decoder = export_onnx(merged, export_dir)
-
-    enc_int8 = quantize_dynamic(encoder, export_dir / "encoder_model_int8.onnx")
-    dec_int8 = quantize_dynamic(decoder, export_dir / "decoder_model_int8.onnx")
-
-    for name in ("tokenizer.json", "tokenizer_config.json", "preprocessor_config.json"):
-        src = adapter_dir / name
-        if src.is_file() and not (export_dir / name).exists():
-            shutil.copy2(src, export_dir / name)
-
-    # This used to hardcode sample_rate=16000 / n_mels=80 here even though
-    # export_whisper_mobile.describe_model() already derives the full runtime
-    # contract (mel bins, fft/hop, token ids, decoding strategy) from the actual
-    # checkpoint. Every LIVE per-user adapter — the one real calibration produces —
-    # went through this path, not the CLI, so it shipped a manifest missing
-    # n_fft/hop_length/decoding.prompt_token_ids/eot_token_id entirely and would
-    # only "work" by accident for a base_model that happens to match whisper-small
-    # English defaults. Reuse describe_model() so live exports get the same
-    # pluggable, checkpoint-derived manifest as the CLI path.
-    manifest = {
-        "adapter_id": adapter_id,
-        "base_model": settings.WHISPER_BASE_MODEL,
-        "format": "onnx",
-        "merged_lora": True,
-        "encoder_file": "encoder_model_int8.onnx",
-        "decoder_file": "decoder_model_int8.onnx",
-        **describe_model(merged, settings.WHISPER_BASE_MODEL),
-        "quantization": "dynamic_quint8",
-        "checksums": {
-            "encoder": sha256_file(enc_int8),
-            "decoder": sha256_file(dec_int8),
-        },
-    }
-    (export_dir / "mobile_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
-    zip_path = build_bundle(export_dir, adapter_id, use_int8=True)
-    return zip_path
+    return export_mobile_bundle(
+        adapter_dir=adapter_dir,
+        output_dir=export_dir,
+        base_model=settings.WHISPER_BASE_MODEL,
+        adapter_id=adapter_id,
+        quantize=True,
+    )
 
 
 def _register_user_adapter(
