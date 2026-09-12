@@ -55,6 +55,49 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
         private const val KEY_ONNX_ADAPTER_ID = "active_onnx_adapter_id"
         private const val KEY_ONNX_VERSION = "active_onnx_version"
         private const val KEY_ONNX_TYPE = "active_onnx_type"
+
+        /**
+         * Reads a 16-bit PCM WAV file's audio samples, skipping past its header (found via
+         * the "data" chunk). Public so any caller feeding a real WAV file into
+         * [com.vaanimitra.stt.SttEngine.transcribe] — not just the adapter-swap verification
+         * flow here — gets real PCM instead of the RIFF header's bytes reinterpreted as
+         * garbage samples.
+         */
+        fun readWavPcm(file: File): ShortArray {
+            if (!file.isFile) return ShortArray(0)
+            val bytes = file.readBytes()
+            if (bytes.size < 44) return ShortArray(0)
+
+            // Locate the "data" sub-chunk instead of assuming a fixed 44-byte header, so files
+            // with extra RIFF chunks (e.g. from third-party recorder libraries) still parse
+            // correctly.
+            var offset = 12 // past "RIFF"+size+"WAVE"
+            var dataOffset = -1
+            var dataSize = 0
+            while (offset + 8 <= bytes.size) {
+                val chunkId = String(bytes, offset, 4, Charsets.US_ASCII)
+                val chunkSize = (bytes[offset + 4].toInt() and 0xFF) or
+                    ((bytes[offset + 5].toInt() and 0xFF) shl 8) or
+                    ((bytes[offset + 6].toInt() and 0xFF) shl 16) or
+                    ((bytes[offset + 7].toInt() and 0xFF) shl 24)
+                if (chunkId == "data") {
+                    dataOffset = offset + 8
+                    dataSize = chunkSize
+                    break
+                }
+                offset += 8 + chunkSize + (chunkSize and 1) // word-aligned
+            }
+            if (dataOffset < 0) return ShortArray(0)
+
+            val end = minOf(dataOffset + dataSize, bytes.size)
+            val sampleCount = (end - dataOffset) / 2
+            val samples = ShortArray(sampleCount)
+            java.nio.ByteBuffer.wrap(bytes, dataOffset, sampleCount * 2)
+                .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                .asShortBuffer()
+                .get(samples)
+            return samples
+        }
     }
 
     private val prefs by lazy {
@@ -178,42 +221,6 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
             newExecutionProvider = newEp,
             usedNpuAfterSwap = usedNpu,
         )
-    }
-
-    /** Reads a 16-bit PCM WAV file's audio samples, skipping past its header (found via the "data" chunk). */
-    private fun readWavPcm(file: File): ShortArray {
-        if (!file.isFile) return ShortArray(0)
-        val bytes = file.readBytes()
-        if (bytes.size < 44) return ShortArray(0)
-
-        // Locate the "data" sub-chunk instead of assuming a fixed 44-byte header, so files
-        // with extra RIFF chunks (e.g. from third-party recorder libraries) still parse correctly.
-        var offset = 12 // past "RIFF"+size+"WAVE"
-        var dataOffset = -1
-        var dataSize = 0
-        while (offset + 8 <= bytes.size) {
-            val chunkId = String(bytes, offset, 4, Charsets.US_ASCII)
-            val chunkSize = (bytes[offset + 4].toInt() and 0xFF) or
-                ((bytes[offset + 5].toInt() and 0xFF) shl 8) or
-                ((bytes[offset + 6].toInt() and 0xFF) shl 16) or
-                ((bytes[offset + 7].toInt() and 0xFF) shl 24)
-            if (chunkId == "data") {
-                dataOffset = offset + 8
-                dataSize = chunkSize
-                break
-            }
-            offset += 8 + chunkSize + (chunkSize and 1) // word-aligned
-        }
-        if (dataOffset < 0) return ShortArray(0)
-
-        val end = minOf(dataOffset + dataSize, bytes.size)
-        val sampleCount = (end - dataOffset) / 2
-        val samples = ShortArray(sampleCount)
-        java.nio.ByteBuffer.wrap(bytes, dataOffset, sampleCount * 2)
-            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
-            .asShortBuffer()
-            .get(samples)
-        return samples
     }
 
     override fun loadUserAdapter(userId: String): AdapterHandle {

@@ -279,10 +279,29 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
                     promise.reject("FILE_NOT_FOUND", "Audio file not found: $audioFilePath")
                     return@launch
                 }
-                val bytes = file.readBytes()
-                val shorts = ShortArray(bytes.size / 2)
-                java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
-                    .asShortBuffer().get(shorts)
+                // A WAV file's "RIFF"/"WAVE" header bytes are not PCM samples — reinterpreting
+                // them as such (as this used to do unconditionally) corrupts the first ~22
+                // samples and, for a file with extra chunks before "data", the alignment of
+                // everything after them too. AdapterManager.readWavPcm already does this
+                // correctly for its adapter-verification flow; reuse it here instead of
+                // assuming every caller passes headerless raw PCM. Non-WAV input (e.g. a raw
+                // PCM file with no RIFF header) still falls back to the old byte-reinterpret
+                // path, since not every caller of this bridge method necessarily has a WAV.
+                val isWav = file.length() >= 12 && file.inputStream().use { stream ->
+                    val header = ByteArray(12)
+                    stream.read(header) == 12 &&
+                        String(header, 0, 4, Charsets.US_ASCII) == "RIFF" &&
+                        String(header, 8, 4, Charsets.US_ASCII) == "WAVE"
+                }
+                val shorts = if (isWav) {
+                    com.vaanimitra.stt.AdapterManager.readWavPcm(file)
+                } else {
+                    val bytes = file.readBytes()
+                    ShortArray(bytes.size / 2).also {
+                        java.nio.ByteBuffer.wrap(bytes).order(java.nio.ByteOrder.LITTLE_ENDIAN)
+                            .asShortBuffer().get(it)
+                    }
+                }
 
                 val result = whisperEngine.transcribe(shorts)
                 val map = Arguments.createMap().apply {
