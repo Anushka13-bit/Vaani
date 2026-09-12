@@ -25,6 +25,39 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 
 
+def discover_adapter_dir() -> Path:
+    """
+    Find the trained adapter so the common case needs no path typed out.
+
+    Training writes sessions/<id>/training/lora_adapter, and the session id is a
+    uuid nobody remembers. With one adapter present it is used; with several the
+    choice is the user's, so they are listed newest first rather than guessed at.
+    """
+    sessions = HERE.parent / "sessions"
+    found = sorted(
+        (p for p in sessions.glob("*/training/lora_adapter") if p.is_dir()),
+        key=lambda p: p.stat().st_mtime,
+        reverse=True,
+    ) if sessions.is_dir() else []
+
+    if not found:
+        raise SystemExit(
+            f"No trained adapter found under {sessions}.\n"
+            "Run a calibration session first, or pass --adapter-dir explicitly."
+        )
+    if len(found) == 1:
+        return found[0]
+
+    lines = "\n".join(
+        f"  --adapter-dir {p}"
+        f"{'   <- most recent' if i == 0 else ''}"
+        for i, p in enumerate(found)
+    )
+    raise SystemExit(
+        f"{len(found)} trained adapters found. Choose one:\n{lines}"
+    )
+
+
 def run_step(name: str, cmd: list[str]) -> int:
     print(f"\n{'=' * 70}\n{name}\n{'=' * 70}")
     print("$ " + " ".join(str(c) for c in cmd))
@@ -42,7 +75,8 @@ def resolve_adb(explicit: str | None) -> str | None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(description="Export, evaluate and deploy an adapter")
-    ap.add_argument("--adapter-dir", type=Path, required=True, help="Trained LoRA adapter directory")
+    ap.add_argument("--adapter-dir", type=Path, default=None,
+                    help="Trained LoRA adapter directory; discovered from sessions/ when omitted")
     ap.add_argument("--adapter-id", default=None, help="Defaults to the adapter manifest's id")
     ap.add_argument("--output-dir", type=Path, default=None)
     ap.add_argument("--base-model", default=None, help="Defaults to the exporter's own default")
@@ -61,9 +95,10 @@ def main() -> None:
     ap.add_argument("--skip-push", action="store_true")
     args = ap.parse_args()
 
-    adapter_dir = args.adapter_dir.resolve()
+    adapter_dir = (args.adapter_dir or discover_adapter_dir()).resolve()
     if not adapter_dir.is_dir():
         sys.exit(f"Adapter directory not found: {adapter_dir}")
+    print(f"Adapter: {adapter_dir}")
 
     adapter_id = args.adapter_id
     if not adapter_id:

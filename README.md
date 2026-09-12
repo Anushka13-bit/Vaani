@@ -281,8 +281,11 @@ python ml/export_whisper_mobile.py \
 **Or run the whole thing in one command** — export, evaluate, deploy:
 
 ```bash
-python ml/run_pipeline.py --adapter-dir sessions/<session-id>/training/lora_adapter
+python ml/run_pipeline.py
 ```
+
+It finds the trained adapter under `sessions/` on its own. If several exist it
+lists them so you can pick with `--adapter-dir`.
 
 This exports the bundle, measures word error rate against the held-out clips that
 training reserved, and installs to the phone **only if the new adapter beat the
