@@ -108,18 +108,33 @@ def _train_user_lora(
     output_dir: Path,
     base_model: str,
 ) -> Path:
-    import torch
-    import torchaudio
-    from datasets import Dataset
-    from peft import LoraConfig, PeftModel, get_peft_model
-    from transformers import (
-        Seq2SeqTrainer,
-        Seq2SeqTrainingArguments,
-        WhisperForConditionalGeneration,
-        WhisperProcessor,
-    )
+    try:
+        import torch
+        import torchaudio
+        from datasets import Dataset
+        from peft import LoraConfig, PeftModel, get_peft_model
+        from transformers import (
+            Seq2SeqTrainer,
+            Seq2SeqTrainingArguments,
+            WhisperForConditionalGeneration,
+            WhisperProcessor,
+        )
+    except ImportError as exc:
+        # Fail loudly rather than substituting a placeholder adapter: a copy of the
+        # warm-start weights would train "successfully", export, deploy to the phone,
+        # and transcribe exactly like the un-personalized base model.
+        raise RuntimeError(
+            f"Training dependencies missing ({exc.name}). Real fine-tuning cannot run. "
+            "Install them in the backend venv: "
+            "pip install -r ml/requirements-training.txt"
+        ) from exc
 
-    device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
+    if torch.cuda.is_available():
+        device = torch.device("cuda")
+    elif torch.backends.mps.is_available():
+        device = torch.device("mps")
+    else:
+        device = torch.device("cpu")
     logger.info("Using device for fine-tuning: %s", device)
 
     logger.info("Loading base Whisper + merging warm-start TORGO adapter from %s", warm_start_dir)
