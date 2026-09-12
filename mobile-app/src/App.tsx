@@ -20,6 +20,13 @@ import { LocalDb } from './storage/localDb';
 import { useStore } from './state/store';
 import { restoreAdaptersOnBoot, syncPhrasebookToNative } from './services/adapterService';
 import { SpeechBridge } from './native/SpeechBridge';
+import type { CorrectionRecord } from './native/types';
+
+// Dependency-free id — this only needs to be locally unique (AsyncStorage key),
+// the server assigns its own correction_id on upload.
+function localId(): string {
+  return `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+}
 
 import WelcomeScreen from './screens/WelcomeScreen';
 import ListeningScreen from './screens/ListeningScreen';
@@ -71,6 +78,7 @@ const LIGHT_THEME = {
 
 export default function App() {
   const {
+    userId,
     setAuth,
     setPreferredLanguage,
     setCorrectionSyncOptIn,
@@ -106,6 +114,34 @@ export default function App() {
       subError?.remove();
     };
   }, [setLastWakeWordEvent, setWakeWordListening, setWakeWordStopReason]);
+
+  // Persist every low-confidence recognition the native pipeline flags for
+  // confirmation as a correction record, so Transcript History actually has
+  // something to show and correct. Before this, onConfirmationRequired was
+  // defined on the bridge and emitted natively but nothing in the app ever
+  // subscribed to it — the correction list was always empty on a real device,
+  // regardless of the audio-upload gap below it.
+  useEffect(() => {
+    const subConfirm = SpeechBridge.onConfirmationRequired((payload) => {
+      const record: CorrectionRecord = {
+        id: localId(),
+        userId: userId ?? '',
+        originalTranscript: payload.text,
+        correctedTranscript: payload.text,
+        audioFilePath: payload.audioPath ?? null,
+        confidenceAtTime: payload.confidence ?? 0,
+        createdAt: Date.now(),
+        syncedToBackend: false,
+      };
+      LocalDb.appendCorrection(record).catch((e) =>
+        console.warn('[App] Failed to store correction record:', e),
+      );
+    });
+
+    return () => {
+      subConfirm?.remove();
+    };
+  }, [userId]);
 
   useEffect(() => {
     (async () => {

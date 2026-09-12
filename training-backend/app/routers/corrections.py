@@ -44,9 +44,11 @@ async def upload_corrections(
 
     now = datetime.now(timezone.utc)
     accepted = 0
+    correction_ids: list[str] = []
     for item in body.corrections:
+        correction_id = str(uuid.uuid4())
         record = CorrectionRecord(
-            correction_id=str(uuid.uuid4()),
+            correction_id=correction_id,
             user_id=body.user_id,
             original_transcript=item.original_transcript,
             corrected_transcript=item.corrected_transcript,
@@ -57,6 +59,7 @@ async def upload_corrections(
             received_at=now,
         )
         db.add(record)
+        correction_ids.append(correction_id)
         accepted += 1
 
     await db.flush()
@@ -88,6 +91,7 @@ async def upload_corrections(
     return CorrectionsUploadResponse(
         accepted=accepted,
         retrain_triggered=retrain_triggered and settings.LIVE_TRAINING_ENABLED,
+        correction_ids=correction_ids,
     )
 
 

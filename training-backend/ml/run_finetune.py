@@ -390,7 +390,14 @@ def _train_user_lora(
 
 
 def _export_mobile_bundle(adapter_dir: Path, adapter_id: str) -> Path:
-    from ml.export_whisper_mobile import build_bundle, export_onnx, load_merged_model, quantize_dynamic, sha256_file
+    from ml.export_whisper_mobile import (
+        build_bundle,
+        describe_model,
+        export_onnx,
+        load_merged_model,
+        quantize_dynamic,
+        sha256_file,
+    )
 
     export_dir = settings.MOBILE_EXPORT_DIR / adapter_id
     if export_dir.exists():
@@ -408,6 +415,15 @@ def _export_mobile_bundle(adapter_dir: Path, adapter_id: str) -> Path:
         if src.is_file() and not (export_dir / name).exists():
             shutil.copy2(src, export_dir / name)
 
+    # This used to hardcode sample_rate=16000 / n_mels=80 here even though
+    # export_whisper_mobile.describe_model() already derives the full runtime
+    # contract (mel bins, fft/hop, token ids, decoding strategy) from the actual
+    # checkpoint. Every LIVE per-user adapter — the one real calibration produces —
+    # went through this path, not the CLI, so it shipped a manifest missing
+    # n_fft/hop_length/decoding.prompt_token_ids/eot_token_id entirely and would
+    # only "work" by accident for a base_model that happens to match whisper-small
+    # English defaults. Reuse describe_model() so live exports get the same
+    # pluggable, checkpoint-derived manifest as the CLI path.
     manifest = {
         "adapter_id": adapter_id,
         "base_model": settings.WHISPER_BASE_MODEL,
@@ -415,8 +431,7 @@ def _export_mobile_bundle(adapter_dir: Path, adapter_id: str) -> Path:
         "merged_lora": True,
         "encoder_file": "encoder_model_int8.onnx",
         "decoder_file": "decoder_model_int8.onnx",
-        "sample_rate": 16000,
-        "n_mels": 80,
+        **describe_model(merged, settings.WHISPER_BASE_MODEL),
         "quantization": "dynamic_quint8",
         "checksums": {
             "encoder": sha256_file(enc_int8),

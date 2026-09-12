@@ -34,12 +34,26 @@ export default function TranscriptHistoryScreen() {
 
     if (correctionSyncOptIn && userId) {
       try {
-        await backendClient.corrections.upload(userId, [{
+        const hasAudio = Boolean(updated.audioFilePath);
+        const resp = await backendClient.corrections.upload(userId, [{
           original_transcript: record.originalTranscript,
           corrected_transcript: corrected,
           confidence_at_time: record.confidenceAtTime,
-          audio_included: false,
+          audio_included: hasAudio,
         }]);
+
+        // The clip is what lets this correction retrain the acoustic model
+        // (not just the phrasebook) — attach it whenever we have one.
+        const correctionId = resp.correction_ids?.[0];
+        if (hasAudio && correctionId && updated.audioFilePath) {
+          try {
+            await backendClient.corrections.uploadAudio(correctionId, updated.audioFilePath);
+          } catch (audioErr: any) {
+            console.warn('[TranscriptHistory] Audio attach failed:', audioErr?.message ?? audioErr);
+            // Text correction is already synced; audio can be retried later.
+            // Not fatal to the correction sync itself.
+          }
+        }
         await LocalDb.markCorrectionsSynced([record.id]);
       } catch (e: any) {
         Alert.alert('Sync failed', e?.message ?? 'Could not sync correction');

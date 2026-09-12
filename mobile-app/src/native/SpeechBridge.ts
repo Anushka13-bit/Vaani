@@ -124,8 +124,20 @@ export const SpeechBridge = {
     return recognitionEvents.addListener('onTranscriptSegment', callback);
   },
 
+  /**
+   * `audioPath`/`confidence`: optional so this stays backward-compatible with a
+   * native build that hasn't been updated yet, but required for a fired
+   * confirmation to ever become a correction that can retrain the acoustic
+   * model (see VoicePipeline — the clip must be written to a file and its path
+   * included here, not just held in memory and discarded).
+   */
   onConfirmationRequired: (
-    callback: (payload: { text: string; intentJson: string }) => void,
+    callback: (payload: {
+      text: string;
+      intentJson: string;
+      audioPath?: string;
+      confidence?: number;
+    }) => void,
   ): EmitterSubscription | null => {
     if (!recognitionEvents) return null;
     return recognitionEvents.addListener('onConfirmationRequired', callback);

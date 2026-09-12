@@ -108,6 +108,9 @@ export interface CorrectionsUploadRequest {
 export interface CorrectionsUploadResponse {
   accepted: number;
   retrain_triggered: boolean;
+  // Server-generated ids, same order as the request's corrections list — needed
+  // to call POST /corrections/{id}/audio afterward for any record that has audio.
+  correction_ids: string[];
 }
 
 // ── Caregiver ─────────────────────────────────────────────────────────────────

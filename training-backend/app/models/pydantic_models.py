@@ -166,6 +166,11 @@ class CorrectionsUploadRequest(BaseModel):
 class CorrectionsUploadResponse(BaseModel):
     accepted: int
     retrain_triggered: bool
+    # Server-generated ids, same order as the request's `corrections` list. Without
+    # these the client has no way to call POST /corrections/{id}/audio afterward —
+    # the id was generated and immediately discarded server-side, so the two-step
+    # "upload text, then attach audio" flow could never complete.
+    correction_ids: list[str] = []
 
 
 class Correction(BaseModel):

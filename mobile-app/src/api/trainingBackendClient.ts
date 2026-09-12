@@ -192,6 +192,28 @@ class TrainingBackendClient {
       });
       return data;
     },
+
+    /**
+     * Attaches the audio clip a correction refers to. Without this a correction
+     * can only ever inform the phrasebook — the backend's
+     * POST /corrections/{id}/audio route existed already, but nothing on the
+     * client ever called it, so a (wrong_text, right_text) pair with no audio
+     * could never be used to retrain the acoustic model.
+     */
+    uploadAudio: async (
+      correctionId: string,
+      audioUri: string,
+      mimeType = 'audio/wav',
+    ): Promise<{ correction_id: string; bytes: number; stored: boolean }> => {
+      const form = new FormData();
+      form.append('audio', { uri: audioUri, type: mimeType, name: 'correction.wav' } as any);
+      const { data } = await this.http.post(
+        `/corrections/${correctionId}/audio`,
+        form,
+        { headers: { 'Content-Type': 'multipart/form-data' }, timeout: 60_000 },
+      );
+      return data;
+    },
   };
 
   // ── Caregiver ─────────────────────────────────────────────────────────────────
