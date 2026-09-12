@@ -103,6 +103,75 @@ def _load_calibration_pairs(session_id: str) -> list[tuple[Path, str]]:
         db.close()
 
 
+def _session_user_id(session_id: str) -> str | None:
+    from app.models.db_models import CalibrationSessionRecord
+
+    db = _sync_db_session()
+    try:
+        row = (
+            db.query(CalibrationSessionRecord)
+            .filter(CalibrationSessionRecord.session_id == session_id)
+            .one_or_none()
+        )
+        return row.user_id if row else None
+    except Exception:
+        return None
+    finally:
+        db.close()
+
+
+def _load_correction_pairs(user_id: str | None, limit: int = 200) -> list[tuple[Path, str]]:
+    """
+    Pull user corrections that carry audio into the training set.
+
+    Corrections were written and never read, so the feedback loop was open: a user
+    could fix the same misrecognition forever without the model ever seeing it.
+    Only rows with audio are usable — (wrong_text, right_text) alone cannot train
+    an acoustic model — and each row is returned as (clip, corrected_text), which
+    is exactly the supervision a calibration sample provides.
+    """
+    if not user_id:
+        return []
+    from app.models.db_models import CorrectionRecord
+
+    db = _sync_db_session()
+    try:
+        rows = (
+            db.query(CorrectionRecord)
+            .filter(
+                CorrectionRecord.user_id == user_id,
+                CorrectionRecord.audio_storage_path.isnot(None),
+                CorrectionRecord.used_in_retrain.is_(False),
+            )
+            .order_by(CorrectionRecord.received_at)
+            .limit(limit)
+            .all()
+        )
+        pairs: list[tuple[Path, str]] = []
+        consumed = []
+        for r in rows:
+            p = Path(r.audio_storage_path)
+            text = (r.corrected_transcript or "").strip()
+            if not text or not p.is_file() or p.stat().st_size < 1000:
+                continue
+            pairs.append((p, text))
+            consumed.append(r)
+        # Mark only what actually made it in, so a skipped clip is retried next run
+        # rather than being silently lost.
+        for r in consumed:
+            r.used_in_retrain = True
+        if consumed:
+            db.commit()
+        if pairs:
+            logger.info("Including %d user correction(s) in training data", len(pairs))
+        return pairs
+    except Exception as ex:
+        logger.warning("Could not load corrections (continuing without them): %s", ex)
+        return []
+    finally:
+        db.close()
+
+
 def _split_holdout(
     pairs: list[tuple[Path, str]],
     fraction: float,
@@ -450,6 +519,7 @@ def run_finetune(session_id: str, user_id: str, job_id: str | None = None) -> di
         )
 
         pairs = _load_calibration_pairs(session_id)
+        pairs += _load_correction_pairs(_session_user_id(session_id))
         warm_start = _resolve_warm_start_adapter_dir()
         work_dir = settings.SESSIONS_DIR / session_id / "training"
         if work_dir.exists():

@@ -25,6 +25,10 @@ def get_sample_path(session_id: str, sample_id: str, suffix: str = ".wav") -> Pa
     return _ensure_dir(STORAGE_ROOT / "calibration" / session_id) / f"{sample_id}{suffix}"
 
 
+def get_correction_audio_path(user_id: str, correction_id: str, suffix: str = ".wav") -> Path:
+    return _ensure_dir(STORAGE_ROOT / "corrections" / user_id) / f"{correction_id}{suffix}"
+
+
 def get_adapter_path(adapter_id: str, filename: str = "adapter_model.bin") -> Path:
     return _ensure_dir(STORAGE_ROOT / "adapters" / adapter_id) / filename
 
