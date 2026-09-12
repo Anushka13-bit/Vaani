@@ -81,21 +81,35 @@ object VoicePipeline {
             return
         }
 
-        if (pcm.isEmpty()) return
+        if (pcm.isEmpty()) {
+            Log.w(TAG, "Captured 0 samples after VAD trim — nothing to transcribe")
+            return
+        }
+        Log.i(TAG, "Captured ${pcm.size} samples (${pcm.size * 1000L / 16000}ms) — transcribing with '$adapterId'")
 
-        val (transcript, avgLogProb, ep) = withContext(Dispatchers.Default) {
-            if (ModelBundleManager.isBundleReady(app, adapterId)) {
+        val (transcript, avgLogProb, ep) = if (ModelBundleManager.isBundleReady(app, adapterId)) {
+            withContext(Dispatchers.Default) {
                 val result = engine.transcribe(pcm)
                 val seg = result.segments.firstOrNull()
                 Triple(result.text, seg?.confidence ?: 0.5f, engine.executionProvider)
-            } else {
-                Log.w(TAG, "ONNX bundle missing — Google STT fallback")
-                val text = AndroidSpeechRecognizerFallback.recognize(app)
-                Triple(text, 0.7f, "GoogleSTT")
             }
+        } else {
+            Log.w(
+                TAG,
+                "ONNX bundle missing for '$adapterId' — Google STT fallback. " +
+                    "Run calibration, or build the base bundle via ml/export_whisper_mobile.py.",
+            )
+            // SpeechRecognizer is main-thread-only. Creating it on a Looper-less dispatcher
+            // throws inside createExternalRecognizer, which catches it and reports "no
+            // recognizer available" — so the whole session died here with no usable reason.
+            val text = withContext(Dispatchers.Main) { AndroidSpeechRecognizerFallback.recognize(app) }
+            Triple(text, 0.7f, "GoogleSTT")
         }
 
-        if (transcript.isBlank()) return
+        if (transcript.isBlank()) {
+            Log.w(TAG, "Transcript came back empty from $ep — nothing to act on")
+            return
+        }
         Log.i(TAG, "Transcript ($ep): $transcript")
 
         val segment = TranscriptSegment(transcript, 0, pcm.size * 1000L / 16000, avgLogProb)
@@ -104,12 +118,19 @@ object VoicePipeline {
 
         var finalText = transcript
         if (scorer.isLowConfidence(finalSeg)) {
+            Log.i(TAG, "Low confidence (${finalSeg.confidence}) — asking user to confirm")
             finalText = ClarificationUi.requestChoice(
                 app,
                 "Did you mean?",
                 listOf(transcript, "(cancel)"),
-            ) ?: return
-            if (finalText.contains("cancel")) return
+            ) ?: run {
+                Log.i(TAG, "Clarification dismissed — ending session")
+                return
+            }
+            if (finalText.contains("cancel")) {
+                Log.i(TAG, "User cancelled at clarification")
+                return
+            }
         }
 
         val phraseMatch = phrasebook.match(finalText)
@@ -131,6 +152,7 @@ object VoicePipeline {
             return
         }
 
+        Log.i(TAG, "Executing intent: action=${intent.action} from '$finalText'")
         withContext(Dispatchers.IO) {
             executor.execute(intent)
         }

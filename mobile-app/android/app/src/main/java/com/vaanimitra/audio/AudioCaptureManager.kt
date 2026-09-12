@@ -26,6 +26,11 @@ class AudioCaptureManager {
     }
 
     private var audioRecord: AudioRecord? = null
+
+    // Written by stopStreaming() from other threads (pipeline teardown, wake-word handoff)
+    // while the capture loop reads it every iteration — without @Volatile that write can
+    // go unseen and the loop keeps holding the mic.
+    @Volatile
     private var isCapturing = false
 
     /**
