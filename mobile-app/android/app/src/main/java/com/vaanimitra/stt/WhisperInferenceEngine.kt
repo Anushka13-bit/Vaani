@@ -2,11 +2,13 @@ package com.vaanimitra.stt
 
 import android.content.Context
 import android.util.Log
+import com.vaanimitra.audio.AudioCaptureManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
 /**
- * On-device Whisper STT with merged TORGO LoRA ONNX (NNAPI → CPU fallback).
+ * On-device Whisper STT via sherpa-onnx, running the merged TORGO LoRA KV-cache
+ * encoder/decoder (NNAPI-requested, CPU fallback — see SherpaOnnxWhisperRuntime).
  */
 class WhisperInferenceEngine(private val context: Context) : SttEngine {
 
@@ -23,6 +25,8 @@ class WhisperInferenceEngine(private val context: Context) : SttEngine {
     @Volatile
     var executionProvider: String = "none"
 
+    private val confidenceScorer = ConfidenceScorer()
+
     fun isModelReady(): Boolean =
         ModelBundleManager.isBundleReady(context, activeAdapterId)
 
@@ -32,44 +36,47 @@ class WhisperInferenceEngine(private val context: Context) : SttEngine {
         pcmAudio: ShortArray,
         sampleRate: Int,
     ): TranscriptionResult = withContext(Dispatchers.Default) {
-        if (sampleRate != MelSpectrogram.SAMPLE_RATE) {
-            Log.w(TAG, "Unexpected sample rate $sampleRate — expected 16000")
+        if (sampleRate != AudioCaptureManager.SAMPLE_RATE) {
+            Log.w(TAG, "Unexpected sample rate $sampleRate — expected ${AudioCaptureManager.SAMPLE_RATE}")
         }
 
         if (!isModelReady()) {
-            Log.e(TAG, "Mobile ONNX bundle not ready for $activeAdapterId")
-            throw IllegalStateException("Mobile ONNX bundle not downloaded. Complete calibration first.")
+            Log.e(TAG, "sherpa-onnx bundle not ready for $activeAdapterId")
+            throw IllegalStateException("Mobile sherpa-onnx bundle not downloaded. Complete calibration first.")
         }
 
-        val runtime = OnnxWhisperRuntime(context, activeAdapterId)
+        val runtime = SherpaOnnxWhisperRuntime(context, activeAdapterId)
         val decoded = runtime.transcribe(pcmAudio)
-            ?: throw IllegalStateException("ONNX inference failed")
+            ?: throw IllegalStateException("sherpa-onnx inference failed")
 
         executionProvider = decoded.executionProvider
         activeAdapterPath = ModelBundleManager.bundleDir(context, activeAdapterId).absolutePath
 
-        Log.i(TAG, "ONNX transcribe EP=${decoded.executionProvider} adapter=$activeAdapterId " +
-            "logProb=${decoded.avgLogProb} text='${decoded.text.take(40)}'")
+        Log.i(TAG, "sherpa-onnx transcribe EP=${decoded.executionProvider} adapter=$activeAdapterId " +
+            "text='${decoded.text.take(40)}'")
 
-        val confidence = expProb(decoded.avgLogProb)
-        TranscriptionResult(
-            text = decoded.text,
-            languageDetected = "en",
-            segments = listOf(
+        // sherpa-onnx's greedy-search Whisper decode surfaces no per-utterance log-prob
+        // or score (see SherpaOnnxWhisperRuntime.DecodeResult) — unlike the old ONNX
+        // runtime's exp(avgLogProb), there is no real confidence signal to compute here.
+        // ConfidenceScorer's text-derived heuristic (tokenLogProbs = null) is an honest
+        // placeholder, not a rediscovered real confidence.
+        val segments = confidenceScorer.score(
+            listOf(
                 TranscriptSegment(
                     text = decoded.text,
                     startMs = 0,
                     endMs = pcmAudio.size.toLong() * 1000 / sampleRate,
-                    confidence = confidence,
+                    confidence = 0f,
                 ),
             ),
-            avgLogProb = decoded.avgLogProb,
+        )
+
+        TranscriptionResult(
+            text = decoded.text,
+            languageDetected = "en",
+            segments = segments,
+            avgLogProb = null,
             executionProvider = decoded.executionProvider,
         )
-    }
-
-    private fun expProb(logProb: Float): Float {
-        if (logProb <= -10f) return 0.1f
-        return kotlin.math.exp(logProb.coerceIn(-10f, 0f)).coerceIn(0f, 1f)
     }
 }

@@ -75,7 +75,7 @@ flowchart TB
         end
 
         subgraph Native["Native Android (Kotlin)"]
-            MIC[Mic + VAD] --> STT["Whisper ONNX<br/>(NNAPI → CPU fallback)"]
+            MIC[Mic + VAD] --> STT["Whisper via sherpa-onnx<br/>(NNAPI-requested → CPU fallback)"]
             STT --> CONF{Confidence}
             CONF -->|Low| CLAR[ClarificationActivity]
             CONF -->|Phrasebook| PB[PhrasebookMatcher]
@@ -114,7 +114,7 @@ flowchart TB
 flowchart LR
     LORA["LoRA weights<br/>(PEFT safetensors)"] --> MERGE["export_whisper_mobile.py<br/>merge + ONNX + optional INT8"]
     MERGE --> ZIP["mobile_bundle.zip"]
-    ZIP -->|GET /v1/adapters/{id}/mobile| DEVICE["OnnxWhisperRuntime<br/>on Android"]
+    ZIP -->|GET /v1/adapters/{id}/mobile| DEVICE["SherpaOnnxWhisperRuntime<br/>on Android"]
 ```
 
 At inference the device loads **one merged ONNX bundle** per adapter — not stacked LoRA at runtime.
@@ -143,7 +143,7 @@ flowchart LR
     B --> C[Vibrate + VoicePipeline]
     C --> D[Mic + VAD capture]
     D --> E{ONNX bundle loaded?}
-    E -->|Yes| F[OnnxWhisperRuntime]
+    E -->|Yes| F[SherpaOnnxWhisperRuntime]
     E -->|No| G[Google SpeechRecognizer fallback]
     F --> H[ConfidenceScorer]
     G --> H
@@ -189,7 +189,7 @@ Audio never leaves your machine. Set `API_HOST` in `mobile-app/src/config/backen
 │   └── android/app/src/main/java/com/vaanimitra/
 │       ├── wakeword/                        # WakeWordForegroundService (openWakeWord)
 │       ├── pipeline/                        # VoicePipeline, ConfirmationGate
-│       ├── stt/                             # OnnxWhisperRuntime, ModelBundleManager
+│       ├── stt/                             # SherpaOnnxWhisperRuntime, ModelBundleManager
 │       ├── recognition/                     # PersonalizedRecognitionService
 │       ├── nlu/                             # IntentParser, PhrasebookMatcher
 │       ├── actions/                         # ActionExecutor, Android intents
@@ -223,13 +223,13 @@ Audio never leaves your machine. Set `API_HOST` in `mobile-app/src/config/backen
 | Mobile UI | React Native 0.74 (TypeScript), React Navigation |
 | State | Zustand, AsyncStorage |
 | Native Android | Kotlin — `RecognitionService`, `AccessibilityService`, foreground service |
-| STT (on-device) | Whisper-small + merged LoRA → **ONNX Runtime Android 1.17** (NNAPI → CPU) |
-| STT (fallback) | Google `SpeechRecognizer` when no ONNX bundle is loaded |
+| STT (on-device) | Whisper-small + merged LoRA → **sherpa-onnx** `OfflineRecognizer` (k2-fsa/sherpa-onnx, prebuilt AAR, NNAPI-requested → CPU fallback) |
+| STT (fallback) | Google `SpeechRecognizer` when no sherpa-onnx bundle is loaded |
 | Wake word | **openWakeWord** (`xyz.rementia:openwakeword`) — ONNX on CPU, no API key |
 | Personalization | LoRA via 🤗 `peft` (server-side); merged at export for mobile |
 | TTS | Android system `TextToSpeech` |
 | Backend | Python, FastAPI, SQLAlchemy (SQLite by default) |
-| Export tooling | `optimum`, `onnxruntime`, `transformers`, `peft` (`ml/requirements-export.txt`) |
+| Export tooling | `openai-whisper`, `onnxruntime`, `transformers`, `peft` (`ml/requirements-export.txt`) — see `docs/SHERPA_ONNX_CONTRACT.md` |
 
 ---
 
@@ -266,7 +266,7 @@ Optional `.env`: `SECRET_KEY`, `LIVE_TRAINING_ENABLED=false` (cluster-only mode,
 
 Audio uploads go to your **local** FastAPI server — never a cloud host.
 
-### 2. Export mobile ONNX bundle (required for on-device Whisper)
+### 2. Export mobile sherpa-onnx bundle (required for on-device Whisper)
 
 ```bash
 cd training-backend
@@ -321,7 +321,15 @@ chmod +x scripts/download_wakeword_models.sh
 
 Downloads `melspectrogram.onnx`, `embedding_model.onnx`, and `hey_jarvis_v0.1.onnx` into `mobile-app/android/app/src/main/assets/` (gitignored). Train custom `hey_lily.onnx` per `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`.
 
-### 4. Mobile app
+### 4. sherpa-onnx Android AAR (one-time after clone)
+
+sherpa-onnx publishes no Maven artifact — this fetches the pinned prebuilt AAR (see `docs/SHERPA_ONNX_CONTRACT.md` for the exact version and why it's pinned) into `mobile-app/android/app/libs/` (gitignored, checksum-verified):
+
+```bash
+python scripts/download_sherpa_onnx_aar.py
+```
+
+### 5. Mobile app
 
 ```bash
 cd mobile-app
@@ -350,16 +358,17 @@ cd mobile-app/android && ./gradlew clean
 
 | Area | Status |
 |---|---|
-| On-device ONNX Whisper | ✅ `OnnxWhisperRuntime`, mel preprocessing, NNAPI → CPU |
+| On-device Whisper (sherpa-onnx) | ✅ `SherpaOnnxWhisperRuntime` — KV-cache encoder/decoder, NNAPI-requested → CPU fallback |
 | Wake word (openWakeWord) | ✅ Implemented; custom `hey_lily.onnx` still to be trained |
 | System-wide dictation | ✅ `PersonalizedRecognitionService` |
 | Calibration sample upload | ✅ Multipart to local FastAPI |
 | Live per-user LoRA training | ✅ `run_finetune.py` — TORGO warm-start, encoder frozen, decoder LoRA r=4 |
-| Auto ONNX export after train | ✅ QUInt8 dynamic quant (same scheme as cluster bundle) |
+| sherpa-onnx export after train | ✅ HF→OpenAI conversion + KV-cache ONNX + INT8 quant (same pipeline as CLI export) |
 | Session polling + download | ✅ `GET /v1/adapter/{session_id}/status` + `/adapter/{session_id}` |
 | Cluster fallback | ✅ On training failure, timeout, or `LIVE_TRAINING_ENABLED=false` |
 | iOS | Scaffold only — Android is the target platform |
-| QNN / Snapdragon NPU EP | Not wired — uses ONNX Runtime NNAPI, not Qualcomm QNN |
+| Per-utterance STT confidence | Not available from sherpa-onnx's greedy-search API — see `docs/SHERPA_ONNX_CONTRACT.md`; `ConfidenceScorer` falls back to a text-length heuristic |
+| QNN / Snapdragon NPU EP | Not wired — sherpa-onnx requests NNAPI, not Qualcomm QNN (needs a from-source build against the Qualcomm SDK) |
 
 Fine-tune requires `pip install -r ml/requirements-training.txt`. GPU recommended; CPU works but is slower (~minutes for 40 clips).
 

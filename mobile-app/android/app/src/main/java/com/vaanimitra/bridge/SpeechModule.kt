@@ -9,7 +9,7 @@ import com.vaanimitra.stt.AdapterHandle
 import com.vaanimitra.stt.AdapterType
 import com.vaanimitra.stt.AdapterVerificationResult
 import com.vaanimitra.stt.ModelBundleManager
-import com.vaanimitra.stt.OnnxRuntimeHolder
+import com.vaanimitra.stt.SherpaOnnxWhisperRuntime
 import com.vaanimitra.util.PermissionHelper
 import com.vaanimitra.wakeword.WakeWordForegroundService
 import android.content.Intent
@@ -192,7 +192,7 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     private fun activateOnnxBundle(adapterId: String) {
         whisperEngine.activeAdapterId = adapterId
         whisperEngine.activeAdapterPath = ModelBundleManager.bundleDir(reactContext, adapterId).absolutePath
-        OnnxRuntimeHolder.release()
+        SherpaOnnxWhisperRuntime.release()
         Log.i(TAG, "Activated ONNX bundle: $adapterId")
     }
 

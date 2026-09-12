@@ -90,12 +90,13 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
         stackedAdapters.add(handle)
         Log.i(TAG, "Loaded ONNX ${type.name} adapter: $adapterId")
 
-        // Actively bind new adapter to WhisperInferenceEngine and release old ONNX sessions
+        // Actively bind new adapter to WhisperInferenceEngine and release the old
+        // cached sherpa-onnx recognizer
         try {
             val engine = com.vaanimitra.VaaniMitraComponents.whisperEngine(context)
             engine.activeAdapterId = adapterId
             engine.activeAdapterPath = bundleDir.absolutePath
-            OnnxRuntimeHolder.release()
+            SherpaOnnxWhisperRuntime.release()
             Log.i(TAG, "Activated ONNX adapter $adapterId in WhisperInferenceEngine")
         } catch (e: Exception) {
             Log.w(TAG, "Could not notify WhisperInferenceEngine of adapter switch: ${e.message}")
@@ -143,7 +144,13 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
         val changed = !previousText.equals(newText, ignoreCase = true)
         val prevEp = previousResult?.executionProvider ?: "unknown"
         val newEp = newResult?.executionProvider ?: "unknown"
-        val usedNpu = newEp.contains("NNAPI", ignoreCase = true) || newEp.contains("QNN", ignoreCase = true)
+        // SherpaOnnxWhisperRuntime reports "nnapi-requested" or "cpu" (see its EP
+        // placement comment) — never "NNAPI"/"QNN" as the old ONNX runtime did. This is
+        // still only what was *requested*, not proof any node actually ran on the NPU:
+        // sherpa-onnx's Kotlin API exposes no EP-placement report the way the old
+        // OnnxRuntimeHolder's ORT profiling did, so treat this the same way the old
+        // "-requested" suffix did — an honest label, not a confirmed placement.
+        val usedNpu = newEp.contains("nnapi", ignoreCase = true) || newEp.contains("qnn", ignoreCase = true)
 
         if (!changed) {
             Log.w(

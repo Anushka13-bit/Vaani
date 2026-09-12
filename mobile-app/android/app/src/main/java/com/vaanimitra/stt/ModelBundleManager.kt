@@ -7,84 +7,92 @@ import java.io.File
 import java.util.zip.ZipInputStream
 
 /**
- * Manages mobile ONNX bundles (encoder/decoder + manifest) on device storage.
+ * Manages sherpa-onnx Whisper mobile bundles (encoder/decoder/tokens + manifest) on
+ * device storage.
  */
 object ModelBundleManager {
 
     private const val TAG = "ModelBundleManager"
     private const val MODELS_DIR = "whisper_models"
 
-    // Describe the Whisper-small cacheless export this app shipped with. Bundles
-    // exported before the manifest carried a runtime contract fall back to these,
-    // so upgrading the exporter does not strand a model already on a device.
-    private const val DEFAULT_ARCHITECTURE = "whisper-encoder-decoder"
+    // The only manifest format this runtime knows how to execute. See
+    // docs/SHERPA_ONNX_CONTRACT.md — the backend export pipeline and this runtime are
+    // built by separate agents against that shared contract, so this string is a fixed
+    // point between them, not a local convention.
+    const val SUPPORTED_FORMAT = "sherpa-onnx-whisper-kv-cache"
+
+    // Pinned sherpa-onnx release the bundled AAR was built from (see build.gradle and
+    // docs/SHERPA_ONNX_CONTRACT.md). Bundles built against a different sherpa-onnx
+    // version are not rejected outright — the KV-cache decoder ABI has been stable
+    // across recent 1.13.x releases — but a mismatch is logged so a real
+    // incompatibility (a future breaking export change) doesn't look like silent
+    // success.
+    private const val PINNED_SHERPA_ONNX_VERSION = "1.13.8"
+
     private const val DEFAULT_SAMPLE_RATE = 16_000
     private const val DEFAULT_N_MELS = 80
-    private const val DEFAULT_N_FFT = 400
-    private const val DEFAULT_HOP = 160
-    private const val DEFAULT_N_FRAMES = 3000
-    private const val DEFAULT_EOT = 50257L
-    private const val DEFAULT_MAX_NEW_TOKENS = 128
-    private const val DEFAULT_ENCODER_INPUT = "input_features"
-    private const val DEFAULT_DECODER_INPUT_IDS = "input_ids"
-    private const val DEFAULT_DECODER_ENCODER_HIDDEN = "encoder_hidden_states"
-    private val DEFAULT_PROMPT_TOKENS = listOf(50258L, 50259L, 50359L, 50363L)
+    private const val DEFAULT_LANGUAGE = "en"
+    private const val DEFAULT_TASK = "transcribe"
 
     /**
-     * Runtime contract for a model bundle.
+     * Runtime contract for a sherpa-onnx Whisper model bundle.
      *
-     * Defaults describe the Whisper-small cacheless export this app shipped with, so
-     * bundles produced before the exporter emitted these fields keep working. Anything
-     * the decode path used to assume is carried here instead, which is what lets a
-     * different model be dropped in without touching code.
+     * Every field here is read straight from `mobile_manifest.json`, never assumed —
+     * that is what lets a different Whisper variant (different language, task, or
+     * quantization) be dropped in without touching this code.
      */
     data class MobileManifest(
         val adapterId: String,
+        val format: String,
         val encoderFile: String,
         val decoderFile: String,
+        val tokensFile: String,
         val mergedLora: Boolean,
         val encoderSha: String? = null,
         val decoderSha: String? = null,
-        val architecture: String = DEFAULT_ARCHITECTURE,
+        val tokensSha: String? = null,
         val sampleRate: Int = DEFAULT_SAMPLE_RATE,
         val nMels: Int = DEFAULT_N_MELS,
-        val nFft: Int = DEFAULT_N_FFT,
-        val hopLength: Int = DEFAULT_HOP,
-        val nFrames: Int = DEFAULT_N_FRAMES,
-        val decoderKvCache: Boolean = false,
-        val promptTokenIds: List<Long> = DEFAULT_PROMPT_TOKENS,
-        val eotTokenId: Long = DEFAULT_EOT,
-        val maxNewTokens: Int = DEFAULT_MAX_NEW_TOKENS,
-        val encoderInputName: String = DEFAULT_ENCODER_INPUT,
-        val decoderInputIdsName: String = DEFAULT_DECODER_INPUT_IDS,
-        val decoderEncoderHiddenName: String = DEFAULT_DECODER_ENCODER_HIDDEN,
+        val language: String = DEFAULT_LANGUAGE,
+        val task: String = DEFAULT_TASK,
+        val sherpaOnnxVersion: String? = null,
     ) {
         /**
          * Why the runtime cannot execute this bundle, or null when it can.
          *
-         * Without this a mismatched model does not fail — it produces confident
-         * nonsense: wrong mel bins reshape into the encoder anyway, and wrong special
-         * token ids decode to garbage or never emit end-of-text. Refusing with a
-         * reason is the only honest option until the corresponding support exists.
+         * A bundle built for the old cacheless ONNX runtime (`"format": "onnx"`, or no
+         * `format` field at all — every bundle exported before this migration) must be
+         * rejected here, not silently fed to sherpa-onnx: the old bundle's encoder/decoder
+         * files are a completely different graph shape (no KV cache, different I/O names)
+         * and sherpa-onnx would either fail to load them or, worse, load them and produce
+         * confident nonsense.
          */
         fun incompatibilityReason(): String? = when {
-            architecture != "whisper-encoder-decoder" ->
-                "architecture '$architecture' is not implemented (only whisper-encoder-decoder)"
-            decoderKvCache ->
-                "decoder exports a KV cache; this runtime feeds only input_ids + " +
-                    "encoder_hidden_states and reads full-sequence logits"
-            nMels != MelSpectrogram.N_MELS ->
-                "model needs $nMels mel bins, feature extractor produces ${MelSpectrogram.N_MELS}"
-            nFft != MelSpectrogram.N_FFT ->
-                "model needs n_fft=$nFft, feature extractor uses ${MelSpectrogram.N_FFT}"
-            hopLength != MelSpectrogram.HOP ->
-                "model needs hop=$hopLength, feature extractor uses ${MelSpectrogram.HOP}"
-            nFrames != MelSpectrogram.N_FRAMES ->
-                "model needs $nFrames frames, feature extractor produces ${MelSpectrogram.N_FRAMES}"
-            sampleRate != MelSpectrogram.SAMPLE_RATE ->
-                "model expects ${sampleRate}Hz audio, capture is ${MelSpectrogram.SAMPLE_RATE}Hz"
-            promptTokenIds.isEmpty() -> "manifest carries no prompt token ids"
+            format != SUPPORTED_FORMAT ->
+                "manifest format '$format' is not supported by this runtime (only " +
+                    "'$SUPPORTED_FORMAT' is) — this looks like a bundle built for the " +
+                    "old cacheless ONNX runtime and must be re-exported"
+            encoderFile.isBlank() -> "manifest carries no encoder_file"
+            decoderFile.isBlank() -> "manifest carries no decoder_file"
+            tokensFile.isBlank() -> "manifest carries no tokens_file"
+            language.isBlank() -> "manifest carries no language"
+            task.isBlank() -> "manifest carries no task"
             else -> null
+        }
+
+        /** Non-fatal: logs when the bundle was exported against a different sherpa-onnx
+         * release than the one this build's AAR is pinned to, in case that ever matters
+         * for a future KV-cache ABI change. */
+        fun logVersionMismatchIfAny() {
+            if (sherpaOnnxVersion != null && sherpaOnnxVersion != PINNED_SHERPA_ONNX_VERSION) {
+                Log.w(
+                    TAG,
+                    "Bundle '$adapterId' was exported with sherpa-onnx $sherpaOnnxVersion, " +
+                        "this build is pinned to $PINNED_SHERPA_ONNX_VERSION — proceeding, " +
+                        "but a KV-cache ABI change between those versions would surface as " +
+                        "a load or decode failure, not a silent one.",
+                )
+            }
         }
     }
 
@@ -97,7 +105,8 @@ object ModelBundleManager {
         // Size check only — hashing ~200MB on every wake word would be far too slow.
         // Content is verified once at extract time by verifyChecksums().
         return dir.resolve(manifest.encoderFile).isNonEmptyFile() &&
-            dir.resolve(manifest.decoderFile).isNonEmptyFile()
+            dir.resolve(manifest.decoderFile).isNonEmptyFile() &&
+            dir.resolve(manifest.tokensFile).isNonEmptyFile()
     }
 
     private fun File.isNonEmptyFile(): Boolean = isFile && length() > 0
@@ -128,34 +137,27 @@ object ModelBundleManager {
         return try {
             val json = JSONObject(file.readText())
             val checksums = json.optJSONObject("checksums")
-            val io = json.optJSONObject("io_names")
-            val dec = json.optJSONObject("decoding")
-            MobileManifest(
+            val manifest = MobileManifest(
                 adapterId = json.getString("adapter_id"),
-                encoderFile = json.getString("encoder_file"),
-                decoderFile = json.getString("decoder_file"),
+                // Old bundles never had a "format" field at all — default to "" (not
+                // e.g. "onnx") so a missing field always fails the compatibility check
+                // rather than accidentally matching some future default.
+                format = json.optString("format", ""),
+                encoderFile = json.optString("encoder_file", ""),
+                decoderFile = json.optString("decoder_file", ""),
+                tokensFile = json.optString("tokens_file", ""),
                 mergedLora = json.optBoolean("merged_lora", true),
                 encoderSha = checksums?.optString("encoder")?.takeIf { it.isNotBlank() },
                 decoderSha = checksums?.optString("decoder")?.takeIf { it.isNotBlank() },
-                architecture = json.optString("architecture", DEFAULT_ARCHITECTURE),
+                tokensSha = checksums?.optString("tokens")?.takeIf { it.isNotBlank() },
                 sampleRate = json.optInt("sample_rate", DEFAULT_SAMPLE_RATE),
                 nMels = json.optInt("n_mels", DEFAULT_N_MELS),
-                nFft = json.optInt("n_fft", DEFAULT_N_FFT),
-                hopLength = json.optInt("hop_length", DEFAULT_HOP),
-                nFrames = json.optInt("n_frames", DEFAULT_N_FRAMES),
-                decoderKvCache = json.optBoolean("decoder_kv_cache", false),
-                promptTokenIds = dec?.optJSONArray("prompt_token_ids")?.let { arr ->
-                    (0 until arr.length()).map { arr.getLong(it) }
-                }?.takeIf { it.isNotEmpty() } ?: DEFAULT_PROMPT_TOKENS,
-                eotTokenId = dec?.optLong("eot_token_id", DEFAULT_EOT) ?: DEFAULT_EOT,
-                maxNewTokens = dec?.optInt("max_new_tokens", DEFAULT_MAX_NEW_TOKENS) ?: DEFAULT_MAX_NEW_TOKENS,
-                encoderInputName = io?.optString("encoder_input", DEFAULT_ENCODER_INPUT)
-                    ?: DEFAULT_ENCODER_INPUT,
-                decoderInputIdsName = io?.optString("decoder_input_ids", DEFAULT_DECODER_INPUT_IDS)
-                    ?: DEFAULT_DECODER_INPUT_IDS,
-                decoderEncoderHiddenName = io?.optString("decoder_encoder_hidden", DEFAULT_DECODER_ENCODER_HIDDEN)
-                    ?: DEFAULT_DECODER_ENCODER_HIDDEN,
+                language = json.optString("language", DEFAULT_LANGUAGE),
+                task = json.optString("task", DEFAULT_TASK),
+                sherpaOnnxVersion = json.optString("sherpa_onnx_version", "").takeIf { it.isNotBlank() },
             )
+            manifest.logVersionMismatchIfAny()
+            manifest
         } catch (e: Exception) {
             Log.e(TAG, "Bad manifest: ${e.message}")
             null
@@ -178,12 +180,13 @@ object ModelBundleManager {
     /**
      * Checks extracted models against the checksums the exporter recorded. A truncated
      * or partial download otherwise stays undetected until inference, where it surfaces
-     * as ORT_INVALID_PROTOBUF from deep inside ONNX Runtime.
+     * as a native sherpa-onnx load failure deep inside the JNI layer.
      */
     fun verifyChecksums(dir: File, manifest: MobileManifest) {
         val targets = listOfNotNull(
             manifest.encoderSha?.let { manifest.encoderFile to it },
             manifest.decoderSha?.let { manifest.decoderFile to it },
+            manifest.tokensSha?.let { manifest.tokensFile to it },
         )
         if (targets.isEmpty()) {
             Log.w(TAG, "Manifest has no checksums — skipping bundle integrity check")
@@ -221,6 +224,9 @@ object ModelBundleManager {
         }
         val manifest = readManifest(destDir)
             ?: throw IllegalStateException("mobile_manifest.json missing from bundle")
+        manifest.incompatibilityReason()?.let { reason ->
+            throw IllegalStateException("Bundle '${manifest.adapterId}' is incompatible: $reason")
+        }
         verifyChecksums(destDir, manifest)
         return manifest
     }

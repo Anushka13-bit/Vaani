@@ -45,6 +45,12 @@ mobile-app/**/*.jks
 mobile-app/android/app/google-services.json
 mobile-app/android/app/src/main/assets/*.onnx
 
+# sherpa-onnx has no Maven artifact — the AAR is fetched by
+# scripts/download_sherpa_onnx_aar.py (pinned version + checksum in
+# docs/SHERPA_ONNX_CONTRACT.md), same pattern as the wake word .onnx models
+# above. Never commit this 50MB binary to git history.
+mobile-app/android/app/libs/*.aar
+
 # ── macOS ─────────────────────────────────────────────────────────────────────
 .DS_Store
 **/.DS_Store

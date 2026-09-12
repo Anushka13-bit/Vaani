@@ -68,6 +68,26 @@ android {
         buildConfig true
     }
 
+    // The sherpa-onnx AAR bundles its own libonnxruntime.so per ABI (jni/<abi>/*.so).
+    // Nothing else in this project ships a native onnxruntime anymore now that the
+    // direct com.microsoft.onnxruntime:onnxruntime-android dependency is gone, so in
+    // practice there is nothing left to collide with it — this is a defensive pick in
+    // case a future dependency (or a different AAR variant) bundles the same .so name,
+    // rather than blindly suppressing Gradle's merge error with excludes.
+    packagingOptions {
+        jniLibs {
+            pickFirsts += [
+                "lib/arm64-v8a/libonnxruntime.so",
+                "lib/armeabi-v7a/libonnxruntime.so",
+                "lib/x86/libonnxruntime.so",
+                "lib/x86_64/libonnxruntime.so",
+                "lib/arm64-v8a/libsherpa-onnx-jni.so",
+                "lib/arm64-v8a/libsherpa-onnx-c-api.so",
+                "lib/arm64-v8a/libsherpa-onnx-cxx-api.so",
+            ]
+        }
+    }
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')
@@ -94,8 +114,12 @@ dependencies {
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
 
-    // On-device Whisper ONNX
-    implementation("com.microsoft.onnxruntime:onnxruntime-android:1.17.3")
+    // On-device Whisper STT via sherpa-onnx (k2-fsa/sherpa-onnx, Apache 2.0).
+    // No Maven artifact is published — this is a prebuilt AAR pulled from the
+    // project's GitHub Releases (see docs/SHERPA_ONNX_CONTRACT.md for how it was
+    // fetched and why this tag was pinned). It bundles its own onnxruntime native
+    // libs, so the old direct onnxruntime-android dependency is gone.
+    implementation(files("libs/sherpa-onnx-1.13.8.aar"))
 
     // openWakeWord
     implementation("xyz.rementia:openwakeword:0.1.5")
