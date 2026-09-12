@@ -196,10 +196,14 @@ def wer_sanity_check(base_model_id: str, merged_model, sample_wav: Path | None) 
 
 
 def build_bundle(output_dir: Path, adapter_id: str, use_int8: bool) -> Path:
-    files = ["encoder_model.onnx", "decoder_model.onnx", "mobile_manifest.json",
-               "tokenizer.json", "preprocessor_config.json"]
+    # Ship only the precision the manifest actually points at. Bundling the fp32
+    # graphs alongside the int8 ones tripled the download (~900MB vs ~250MB) with
+    # files the phone never opens.
+    files = ["mobile_manifest.json", "tokenizer.json", "preprocessor_config.json"]
     if use_int8:
         files.extend(["encoder_model_int8.onnx", "decoder_model_int8.onnx"])
+    else:
+        files.extend(["encoder_model.onnx", "decoder_model.onnx"])
 
     zip_path = output_dir / "mobile_bundle.zip"
     with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
