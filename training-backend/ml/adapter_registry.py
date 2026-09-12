@@ -54,6 +54,15 @@ async def scan_and_register_adapters() -> None:
                 logger.debug("Skipping %s — no adapter_manifest.json", adapter_dir.name)
                 continue
             await _register_from_manifest(session, adapter_dir, manifest_path)
+
+        # Deactivate obsolete cluster adapters whose directories no longer exist on disk
+        from sqlalchemy import select
+        all_adapters = (await session.execute(select(AdapterRecord))).scalars().all()
+        for rec in all_adapters:
+            if rec.type == "CLUSTER" and not (adapters_dir / rec.adapter_id).is_dir():
+                if rec.is_active:
+                    rec.is_active = False
+                    logger.info("Deactivated obsolete cluster adapter: %s", rec.adapter_id)
         await session.commit()
 
 

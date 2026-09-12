@@ -78,7 +78,7 @@ async def get_cluster_adapter(
     if severity:
         query = query.where(AdapterRecord.severity_cluster == severity)
 
-    query = query.order_by(AdapterRecord.version.desc()).limit(1)
+    query = query.order_by(AdapterRecord.version.desc(), AdapterRecord.created_at.desc()).limit(1)
     result = await db.execute(query)
     adapter = result.scalar_one_or_none()
 

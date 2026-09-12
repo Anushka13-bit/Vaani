@@ -106,9 +106,27 @@ def main() -> None:
 
         # run-as starts in the app's data dir, so dest stays relative.
         run([adb, "shell", "run-as", PACKAGE, "rm", "-rf", dest], check=False)
+        # Purge obsolete/stale torgo_cluster_english_v1 mock if present
+        run([adb, "shell", "run-as", PACKAGE, "rm", "-rf", "files/whisper_models/torgo_cluster_english_v1"], check=False)
         run([adb, "shell", "run-as", PACKAGE, "mkdir", "-p", dest])
         for path in files:
             run([adb, "shell", "run-as", PACKAGE, "cp", f"{DEVICE_TMP}/{path.name}", f"{dest}/{path.name}"])
+
+        # Update SharedPreferences so the app points directly to the installed adapter
+        adapter_type = "USER" if args.install_as.startswith("user_") else "CLUSTER"
+        prefs_xml = (
+            "<?xml version='1.0' encoding='utf-8' standalone='yes' ?>\n"
+            "<map>\n"
+            '    <int name="active_onnx_version" value="1" />\n'
+            f'    <string name="active_onnx_adapter_id">{args.install_as}</string>\n'
+            f'    <string name="active_onnx_type">{adapter_type}</string>\n'
+            "</map>\n"
+        )
+        prefs_path = staged / "vaani_adapters.xml"
+        prefs_path.write_text(prefs_xml, encoding="utf-8")
+        run([adb, "push", str(prefs_path), f"{DEVICE_TMP}/vaani_adapters.xml"], capture=True)
+        run([adb, "shell", "run-as", PACKAGE, "mkdir", "-p", "shared_prefs"], check=False)
+        run([adb, "shell", "run-as", PACKAGE, "cp", f"{DEVICE_TMP}/vaani_adapters.xml", "shared_prefs/vaani_adapters.xml"])
 
         run([adb, "shell", "rm", "-rf", DEVICE_TMP], check=False)
 
