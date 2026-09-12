@@ -182,13 +182,19 @@ class AndroidIntentActions(private val context: Context) {
         }
     }
 
-    /** Whisper punctuates ("Open settings."), and users say filler articles. */
+    /**
+     * Whisper punctuates ("Open settings."), and people pad the name with articles and
+     * a trailing noun ("open the Netflix app") that is never part of the launcher label.
+     */
     private fun normalizeAppQuery(raw: String): String {
         var s = raw.lowercase().trim().trim('.', ',', '!', '?', ';', ':').trim()
         for (prefix in listOf("the ", "my ", "a ", "up ")) {
             if (s.startsWith(prefix)) s = s.removePrefix(prefix).trim()
         }
-        return s
+        for (suffix in listOf(" app", " application", " screen", " settings page")) {
+            if (s.endsWith(suffix)) s = s.removeSuffix(suffix).trim()
+        }
+        return s.trim('.', ',', '!', '?', ';', ':').trim()
     }
 
     private fun resolveContactPhone(contactName: String): String? {

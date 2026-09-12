@@ -38,6 +38,7 @@ object VoicePipeline {
     private const val TAG = "VoicePipeline"
     private const val LISTEN_TIMEOUT_MS = 8000L
     private const val SILENCE_END_MS = 1500L
+    private val NON_SPEECH_MARKER = Regex("^[\\[(<][^\\[\\]()<>]*[\\])>][.!?]?$")
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
@@ -115,6 +116,12 @@ object VoicePipeline {
             Log.w(TAG, "Transcript came back empty from $ep — nothing to act on")
             return
         }
+        if (isNonSpeechMarker(transcript)) {
+            // Whisper labels silence/noise rather than returning nothing, and those
+            // labels were being emitted downstream as if the user had dictated them.
+            Log.i(TAG, "Non-speech audio ('$transcript') — ignoring")
+            return
+        }
         Log.i(TAG, "Transcript ($ep): $transcript")
 
         val segment = TranscriptSegment(transcript, 0, pcm.size * 1000L / 16000, avgLogProb)
@@ -167,6 +174,16 @@ object VoicePipeline {
         } else {
             Log.w(TAG, "Action FAILED: ${result.message} (accessibilityFallback=${result.requiresAccessibilityFallback})")
         }
+    }
+
+    /**
+     * Whisper annotates non-speech audio instead of returning an empty string —
+     * "[BLANK_AUDIO]", "(upbeat music)", "[ Silence ]". Any transcript that is entirely
+     * one bracketed token is an annotation, not something the user said.
+     */
+    private fun isNonSpeechMarker(text: String): Boolean {
+        val t = text.trim()
+        return t.isEmpty() || NON_SPEECH_MARKER.matches(t)
     }
 
     /** Stream until 1.5s silence or 8s hard max. Exits naturally when VAD silence threshold met. */
