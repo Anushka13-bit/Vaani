@@ -157,9 +157,15 @@ object VoicePipeline {
             return
         }
 
-        Log.i(TAG, "Executing intent: action=${intent.action} from '$finalText'")
-        withContext(Dispatchers.IO) {
+        Log.i(TAG, "Executing intent: action=${intent.action} entities=${intent.entities} from '$finalText'")
+        val result = withContext(Dispatchers.IO) {
             executor.execute(intent)
+        }
+        // Discarding this made a failed action indistinguishable from no action at all.
+        if (result.success) {
+            Log.i(TAG, "Action succeeded: ${result.message}")
+        } else {
+            Log.w(TAG, "Action FAILED: ${result.message} (accessibilityFallback=${result.requiresAccessibilityFallback})")
         }
     }
 

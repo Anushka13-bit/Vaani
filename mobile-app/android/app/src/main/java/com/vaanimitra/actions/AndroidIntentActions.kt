@@ -5,6 +5,7 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.AlarmClock
 import android.provider.ContactsContract
+import android.provider.Settings
 import android.util.Log
 
 /**
@@ -14,6 +15,21 @@ class AndroidIntentActions(private val context: Context) {
 
     companion object {
         private const val TAG = "AndroidIntentActions"
+
+        private val SYSTEM_SCREENS = mapOf(
+            "settings" to Settings.ACTION_SETTINGS,
+            "setting" to Settings.ACTION_SETTINGS,
+            "wifi" to Settings.ACTION_WIFI_SETTINGS,
+            "wi-fi" to Settings.ACTION_WIFI_SETTINGS,
+            "bluetooth" to Settings.ACTION_BLUETOOTH_SETTINGS,
+            "display" to Settings.ACTION_DISPLAY_SETTINGS,
+            "sound" to Settings.ACTION_SOUND_SETTINGS,
+            "accessibility" to Settings.ACTION_ACCESSIBILITY_SETTINGS,
+            "location" to Settings.ACTION_LOCATION_SOURCE_SETTINGS,
+            "date and time" to Settings.ACTION_DATE_SETTINGS,
+            "airplane mode" to Settings.ACTION_AIRPLANE_MODE_SETTINGS,
+            "storage" to Settings.ACTION_INTERNAL_STORAGE_SETTINGS,
+        )
     }
 
     fun sendSms(contact: String, body: String): ActionResult {
@@ -99,33 +115,80 @@ class AndroidIntentActions(private val context: Context) {
     }
 
     fun openApp(appName: String): ActionResult {
+        val query = normalizeAppQuery(appName)
+        if (query.isBlank()) {
+            return ActionResult(success = false, message = "No app name heard")
+        }
+
+        // System destinations are not launchable activities, so enumerating launcher
+        // entries never finds them — "settings" has to go through its Settings intent.
+        SYSTEM_SCREENS[query]?.let { action ->
+            return try {
+                context.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                Log.i(TAG, "Opened system screen '$query' via $action")
+                ActionResult(success = true, message = "Opening $query")
+            } catch (e: Exception) {
+                Log.e(TAG, "System screen '$query' failed: ${e.message}")
+                ActionResult(success = false, message = "Could not open $query")
+            }
+        }
+
         return try {
-            val packageManager = context.packageManager
-            val packages = packageManager.getInstalledApplications(0)
-            val match = packages.firstOrNull {
-                packageManager.getApplicationLabel(it).toString()
-                    .lowercase().contains(appName.lowercase())
+            val pm = context.packageManager
+            val launcherIntent = Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_LAUNCHER)
+            val candidates = pm.queryIntentActivities(launcherIntent, 0)
+            if (candidates.isEmpty()) {
+                // Almost always the missing <queries> manifest entry on API 30+.
+                Log.w(TAG, "PackageManager returned no launchable apps — check <queries> visibility")
             }
-            if (match != null) {
-                val launchIntent = packageManager.getLaunchIntentForPackage(match.packageName)
-                    ?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
-                if (launchIntent != null) {
-                    context.startActivity(launchIntent)
-                    ActionResult(success = true, message = "Opening ${match.packageName}")
-                } else {
-                    ActionResult(
-                        success = false,
-                        message = "No launch intent for $appName",
-                        requiresAccessibilityFallback = true,
-                    )
+
+            // Prefer an exact label, then a prefix, then a substring, so "clock" does not
+            // lose to some "Clockwork Companion" that merely contains the word.
+            val best = candidates
+                .mapNotNull { info ->
+                    val label = info.loadLabel(pm).toString().lowercase()
+                    val rank = when {
+                        label == query -> 0
+                        label.startsWith(query) -> 1
+                        label.contains(query) -> 2
+                        else -> null
+                    }
+                    rank?.let { it to info }
                 }
-            } else {
-                ActionResult(success = false, message = "App '$appName' not found")
+                .minByOrNull { it.first }
+                ?.second
+
+            if (best == null) {
+                Log.w(TAG, "No installed app matches '$query' (${candidates.size} launchable apps visible)")
+                return ActionResult(success = false, message = "I couldn't find an app called $query")
             }
+
+            val pkg = best.activityInfo.packageName
+            val launch = pm.getLaunchIntentForPackage(pkg)?.apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
+            if (launch == null) {
+                Log.w(TAG, "No launch intent for $pkg")
+                return ActionResult(
+                    success = false,
+                    message = "No launch intent for $query",
+                    requiresAccessibilityFallback = true,
+                )
+            }
+            context.startActivity(launch)
+            Log.i(TAG, "Opened $pkg for query '$query'")
+            ActionResult(success = true, message = "Opening $query")
         } catch (e: Exception) {
             Log.e(TAG, "openApp failed: ${e.message}")
             ActionResult(success = false, message = "Failed to open app: ${e.message}")
         }
+    }
+
+    /** Whisper punctuates ("Open settings."), and users say filler articles. */
+    private fun normalizeAppQuery(raw: String): String {
+        var s = raw.lowercase().trim().trim('.', ',', '!', '?', ';', ':').trim()
+        for (prefix in listOf("the ", "my ", "a ", "up ")) {
+            if (s.startsWith(prefix)) s = s.removePrefix(prefix).trim()
+        }
+        return s
     }
 
     private fun resolveContactPhone(contactName: String): String? {

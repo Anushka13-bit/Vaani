@@ -35,6 +35,17 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- Package visibility (API 30+): without this, PackageManager hides every other
+         app, so "open <app>" can never find what the user asked for. Declaring the
+         launcher intent reveals launchable apps only — narrower than QUERY_ALL_PACKAGES,
+         which Play restricts to a small set of justified use cases. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.MAIN" />
+            <category android:name="android.intent.category.LAUNCHER" />
+        </intent>
+    </queries>
+
     <application
         android:name=".MainApplication"
         android:label="@string/app_name"
