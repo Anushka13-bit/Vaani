@@ -409,6 +409,43 @@ def _export_mobile_bundle(adapter_dir: Path, adapter_id: str) -> Path:
     )
 
 
+def _adapter_manifest_dict(adapter_id: str, weights_dir: Path) -> dict:
+    manifest = {
+        "adapter_id": adapter_id,
+        "type": "USER",
+        "language_code": "en",
+        "base_model": settings.WHISPER_BASE_MODEL,
+        "version": 1,
+        "weights_file": "adapter_model.safetensors",
+        "parent_adapter_id": settings.WARM_START_ADAPTER_ID,
+    }
+    if not (weights_dir / "adapter_model.safetensors").is_file():
+        manifest["weights_file"] = "adapter_model.bin"
+    return manifest
+
+
+def _write_adapter_manifest(adapter_dir: Path, adapter_id: str) -> None:
+    """
+    Write adapter_manifest.json into the raw training output directory, before
+    export needs it.
+
+    export_mobile_bundle() (ml/export_whisper_mobile.py) reads
+    adapter_dir/adapter_manifest.json for language_code — true for every
+    pre-existing/CLI-supplied adapter directory, but the live calibration
+    path's training output never had this file until _register_user_adapter
+    wrote one, and that runs *after* export in run_finetune()'s pipeline.
+    Every live-trained adapter's export failed with a FileNotFoundError until
+    this ran first. _register_user_adapter still writes its own copy into the
+    registered ml/adapters/<id>/ directory afterward — harmless duplication,
+    not a second source of truth, since both describe the same just-trained
+    adapter.
+    """
+    manifest = _adapter_manifest_dict(adapter_id, adapter_dir)
+    (adapter_dir / "adapter_manifest.json").write_text(
+        json.dumps(manifest, indent=2), encoding="utf-8"
+    )
+
+
 def _register_user_adapter(
     adapter_id: str,
     user_id: str,
@@ -423,18 +460,7 @@ def _register_user_adapter(
         shutil.rmtree(dest)
     shutil.copytree(lora_dir, dest)
 
-    manifest = {
-        "adapter_id": adapter_id,
-        "type": "USER",
-        "language_code": "en",
-        "base_model": settings.WHISPER_BASE_MODEL,
-        "version": 1,
-        "weights_file": "adapter_model.safetensors",
-        "parent_adapter_id": settings.WARM_START_ADAPTER_ID,
-    }
-    weights = dest / "adapter_model.safetensors"
-    if not weights.is_file():
-        manifest["weights_file"] = "adapter_model.bin"
+    manifest = _adapter_manifest_dict(adapter_id, dest)
     (dest / "adapter_manifest.json").write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 
     checksum = _sha256_file(dest / manifest["weights_file"]) if (dest / manifest["weights_file"]).is_file() else ""
@@ -522,6 +548,7 @@ def run_finetune(session_id: str, user_id: str, job_id: str | None = None) -> di
             output_dir=work_dir,
             base_model=settings.WHISPER_BASE_MODEL,
         )
+        _write_adapter_manifest(lora_dir, adapter_id)
 
         write_status(session_id, status="exporting", message="Exporting ONNX mobile bundle")
         bundle_zip = _export_mobile_bundle(lora_dir, adapter_id)
