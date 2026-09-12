@@ -69,11 +69,30 @@ android {
     }
 
     // The sherpa-onnx AAR bundles its own libonnxruntime.so per ABI (jni/<abi>/*.so).
-    // Nothing else in this project ships a native onnxruntime anymore now that the
-    // direct com.microsoft.onnxruntime:onnxruntime-android dependency is gone, so in
-    // practice there is nothing left to collide with it — this is a defensive pick in
-    // case a future dependency (or a different AAR variant) bundles the same .so name,
-    // rather than blindly suppressing Gradle's merge error with excludes.
+    // This was NOT hypothetical: xyz.rementia:openwakeword transitively depends on
+    // com.microsoft.onnxruntime:onnxruntime-android:1.18.0, which ALSO ships a
+    // libonnxruntime.so — and the two are binary-incompatible despite sharing a
+    // filename. Each requires an exact ELF symbol-version tag matching its own
+    // release (verified via `llvm-readobj --version-info`): openWakeWord's JNI hard-
+    // requires "libonnxruntime.so" version "VERS_1.18.0", sherpa-onnx's JNI hard-
+    // requires "VERS_1.28.2". Neither file can satisfy the other's requirement, so
+    // only one "libonnxruntime.so" can exist in the merged APK and it must be
+    // sherpa's (pickFirsts below) — but that leaves openWakeWord's JNI unable to
+    // resolve at dlopen time (`UnsatisfiedLinkError: cannot locate symbol
+    // OrtGetApiBase`), crashing the whole app the moment the wake-word service
+    // starts.
+    //
+    // Fix: app/src/main/jniLibs/arm64-v8a/ ships two extra files, generated once
+    // (not by this build) and checked in:
+    //   - libonnxruntimf.so — a byte-identical copy of the official onnxruntime-
+    //     android:1.18.0 libonnxruntime.so, renamed (one character) so it can't
+    //     collide with sherpa's copy of the real name.
+    //   - libonnxruntime4j_jni.so — openWakeWord's own JNI glue, with its single
+    //     DT_NEEDED entry ("libonnxruntime.so") byte-patched to the renamed name
+    //     above. Same length, same offset semantics — nothing else in the ELF
+    //     structure changes. pickFirsts must prefer this project-provided copy
+    //     over the unmodified one bundled inside openwakeword's own AAR.
+    // See docs/SHERPA_ONNX_CONTRACT.md for how this was diagnosed and regenerated.
     packagingOptions {
         jniLibs {
             pickFirsts += [
@@ -84,6 +103,7 @@ android {
                 "lib/arm64-v8a/libsherpa-onnx-jni.so",
                 "lib/arm64-v8a/libsherpa-onnx-c-api.so",
                 "lib/arm64-v8a/libsherpa-onnx-cxx-api.so",
+                "lib/arm64-v8a/libonnxruntime4j_jni.so",
             ]
         }
     }

@@ -166,14 +166,15 @@ def main() -> None:
                 sys.exit(f"Verification failed: {name} not present on device after copy.")
 
     if not args.keep_app_running:
-        # ONNX sessions are cached in OnnxRuntimeHolder; restart so the new files are read.
+        # The sherpa-onnx recognizer is cached in SherpaOnnxWhisperRuntime; restart so
+        # the new files are read.
         run(adb + ["shell", "am", "force-stop", PACKAGE], check=False)
         print("App force-stopped so it reloads the new model on next launch.")
 
     print(
         f"\nDone — model is on the phone as '{args.install_as}'.\n"
         "Launch the app, say the wake word, then watch:\n"
-        "  adb logcat -s VoicePipeline:V WhisperInferenceEngine:V OnnxRuntimeHolder:V"
+        "  adb logcat -s VoicePipeline:V WhisperInferenceEngine:V SherpaOnnxWhisperRuntime:V"
     )
 
 
