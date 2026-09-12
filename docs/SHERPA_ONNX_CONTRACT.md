@@ -155,6 +155,26 @@ old files should be deleted once the new path works, not kept as dead code.
   `SherpaOnnxWhisperRuntime` reports `"nnapi-requested"` or `"cpu"`,
   reflecting only what was asked for, exactly as the old runtime's
   `"NNAPI-requested"` label did before profiling was wired up.
+- **openWakeWord and sherpa-onnx cannot both bundle a plain `libonnxruntime.so`
+  — confirmed as a real crash on real hardware, not a hypothetical.**
+  `xyz.rementia:openwakeword:0.1.5` transitively depends on
+  `com.microsoft.onnxruntime:onnxruntime-android:1.18.0`, which also ships a
+  `libonnxruntime.so`. Removing the app's own direct `onnxruntime-android`
+  dependency (since sherpa-onnx's AAR bundles its own) left sherpa's copy as
+  the only one packaged — and openWakeWord's JNI immediately failed with
+  `UnsatisfiedLinkError: cannot locate symbol OrtGetApiBase` the moment the
+  wake-word service started, crashing the whole app. `llvm-readobj
+  --version-info` on both `.so` files showed why: each hard-requires an
+  **exact** ELF symbol-version tag matching its own release (openWakeWord
+  needs `VERS_1.18.0`, sherpa-onnx only defines `VERS_1.28.2`) — bionic's
+  linker does exact-string verneed/verdef matching, so neither file can
+  substitute for the other. Fixed by `scripts/generate_wakeword_onnxruntime_shim.py`,
+  which fetches the official 1.18.0 build and produces a renamed,
+  byte-patched copy (own `DT_SONAME` patched, and openWakeWord's JNI
+  `DT_NEEDED` entry patched to match) so both coexist under different
+  on-disk names. Verified end-to-end on the target Snapdragon 8 Elite Gen 5
+  device: app no longer crashes, and the wake-word service's `AudioRecord`
+  starts successfully.
 
 ## Manifest contract (`mobile_manifest.json`)
 

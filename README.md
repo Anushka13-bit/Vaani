@@ -329,6 +329,12 @@ sherpa-onnx publishes no Maven artifact — this fetches the pinned prebuilt AAR
 python scripts/download_sherpa_onnx_aar.py
 ```
 
+sherpa-onnx and openWakeWord each bundle their own, binary-incompatible `libonnxruntime.so` (see `docs/SHERPA_ONNX_CONTRACT.md` — this crashes the app on launch if skipped). Generate the patched shim that lets both coexist:
+
+```bash
+python scripts/generate_wakeword_onnxruntime_shim.py
+```
+
 ### 5. Mobile app
 
 ```bash
