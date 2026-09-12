@@ -47,6 +47,14 @@ class WakeWordForegroundService : Service() {
 
     companion object {
         private const val TAG = "WakeWordService"
+        /**
+         * openWakeWord scores 0..1. This sat at 0.08, which fired on ordinary room noise
+         * roughly every cooldown window and ran a full NPU transcription on silence each
+         * time. Raised conservatively rather than to the usual ~0.5, because a miss on
+         * stage is worse than an extra trigger and dysarthric speech can score lower.
+         * The detection log line prints the real score — tune against it.
+         */
+        private const val WAKE_THRESHOLD = 0.20f
         private const val CHANNEL_ID = "vaani_wake_word"
         private const val NOTIFICATION_ID = 1001
         const val ACTION_START = "com.vaanimitra.wakeword.START"
@@ -116,7 +124,7 @@ class WakeWordForegroundService : Service() {
             val model = WakeWordModel(
                 name = modelName,
                 modelPath = modelPath,
-                threshold = 0.08f,
+                threshold = WAKE_THRESHOLD,
             )
             val engine = WakeWordEngine(
                 context = applicationContext,

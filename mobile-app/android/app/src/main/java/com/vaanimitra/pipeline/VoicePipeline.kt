@@ -91,6 +91,13 @@ object VoicePipeline {
             Log.w(TAG, "Captured 0 samples after VAD trim — nothing to transcribe")
             return
         }
+        // A false wake-word trigger still captures a buffer, and trimSilence hands back
+        // silence unchanged rather than empty — so without this every false trigger paid
+        // for a full NPU encoder+decoder pass and surfaced as "[BLANK_AUDIO]".
+        if (!vad.hasSpeech(pcm)) {
+            Log.i(TAG, "No speech energy in ${pcm.size} samples — skipping transcription")
+            return
+        }
         Log.i(TAG, "Captured ${pcm.size} samples (${pcm.size * 1000L / 16000}ms) — transcribing with '$adapterId'")
 
         val (transcript, avgLogProb, ep) = if (ModelBundleManager.isBundleReady(app, adapterId)) {

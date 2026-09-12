@@ -55,7 +55,17 @@ class AndroidIntentActions(private val context: Context) {
 
     fun placeCall(contact: String): ActionResult {
         return try {
-            val phone = resolveContactPhone(contact) ?: contact
+            // Falling back to the spoken name opened the dialler on "tel:john" — a dead
+            // end that looks like the app worked. Report the real reason instead, which
+            // is usually that READ_CONTACTS was never granted.
+            val phone = resolveContactPhone(contact)
+            if (phone == null) {
+                Log.w(TAG, "Could not resolve '$contact' to a number (contacts permission or no match)")
+                return ActionResult(
+                    success = false,
+                    message = "I couldn't find a number for $contact",
+                )
+            }
             val intent = Intent(Intent.ACTION_DIAL).apply {
                 data = Uri.parse("tel:$phone")
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)

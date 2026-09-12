@@ -40,20 +40,31 @@ object ConfirmationGate {
         suspendCancellableCoroutine { cont ->
             val done = AtomicBoolean(false)
             // Launch clarification activity for tap fallback
+            // ClarificationActivity reports the button's label, not an id, so the
+            // confirm branch has to compare against the very label we send. Comparing
+            // to CHOICE_A ("a") was never equal to "Yes", so every confirmation was
+            // silently answered "no" and the action cancelled even when the user tapped
+            // Confirm.
+            val confirmLabel = "Yes"
             val intent = Intent(context, ClarificationActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                 putExtra(ClarificationActivity.EXTRA_PROMPT, "Tap Confirm or say Yes")
-                putExtra(ClarificationActivity.EXTRA_OPTION_A, "Yes")
+                putExtra(ClarificationActivity.EXTRA_OPTION_A, confirmLabel)
                 putExtra(ClarificationActivity.EXTRA_OPTION_B, "Cancel")
             }
             ClarificationActivity.pendingCallback = { choice ->
-                if (!done.getAndSet(true)) cont.resume(choice == ClarificationActivity.CHOICE_A)
+                val confirmed = choice.equals(confirmLabel, ignoreCase = true)
+                Log.i(TAG, "Confirmation choice='$choice' -> confirmed=$confirmed")
+                if (!done.getAndSet(true)) cont.resume(confirmed)
             }
             context.startActivity(intent)
 
             // Auto-timeout cancel after 8s
             android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
-                if (!done.getAndSet(true)) cont.resume(false)
+                if (!done.getAndSet(true)) {
+                    Log.w(TAG, "Confirmation timed out after 8s with no choice — cancelling")
+                    cont.resume(false)
+                }
             }, 8000)
         }
 }

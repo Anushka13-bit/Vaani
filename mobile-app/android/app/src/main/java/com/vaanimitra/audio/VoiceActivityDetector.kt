@@ -31,6 +31,25 @@ class VoiceActivityDetector(
     }
 
     /**
+     * True if any frame in [pcm] carries speech energy.
+     *
+     * trimSilence cannot answer this: when no frame is speech it leaves speechStart/
+     * speechEnd at the full range and hands back the untouched buffer, so a capture of
+     * pure silence is never empty and slips past an isEmpty() guard into a full ONNX
+     * encoder+decoder pass.
+     */
+    fun hasSpeech(pcm: ShortArray): Boolean {
+        val frameSize = sampleRate * FRAME_DURATION_MS / 1000
+        if (pcm.size < frameSize) return false
+        var i = 0
+        while (i + frameSize <= pcm.size) {
+            if (rmsEnergy(pcm.copyOfRange(i, i + frameSize)) > energyThreshold) return true
+            i += frameSize
+        }
+        return false
+    }
+
+    /**
      * Trim leading and trailing silence from a full PCM buffer.
      * Returns a sub-array containing only the speech region.
      */
