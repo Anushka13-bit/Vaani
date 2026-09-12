@@ -24,6 +24,7 @@ import hashlib
 import json
 import logging
 import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 
@@ -61,35 +62,60 @@ def load_merged_model(adapter_dir: Path, base_model: str):
 
 
 def export_onnx(model, output_dir: Path) -> tuple[Path, Path]:
-    from optimum.exporters.onnx import export
-    from optimum.onnxruntime import ORTModelForSpeechSeq2Seq
+    # main_export (not export) is the entry point that takes a checkpoint path, a task
+    # and splits an encoder-decoder model into separate ONNX graphs. The low-level
+    # export() takes (model, OnnxConfig, output) and has no model_name_or_path/task.
+    from optimum.exporters.onnx import main_export
     from transformers import WhisperProcessor
 
     output_dir.mkdir(parents=True, exist_ok=True)
     processor = WhisperProcessor.from_pretrained(model.config._name_or_path)
 
-    logger.info("Exporting ONNX via optimum → %s", output_dir)
-    export(
-        model_name_or_path=None,
-        output=output_dir,
-        model=model,
-        task="automatic-speech-recognition",
-        monolith=False,
-    )
+    # The on-device decoder loop (OnnxRuntimeHolder.runDecoderStep) feeds exactly
+    # input_ids + encoder_hidden_states. A KV-cache export additionally demands
+    # past_key_values.* / use_cache_branch inputs, which ORT would reject at runtime
+    # on the phone — so export the cacheless variant.
+    model.config.use_cache = False
+    if getattr(model, "generation_config", None) is not None:
+        model.generation_config.use_cache = False
+
+    with tempfile.TemporaryDirectory() as tmp:
+        checkpoint = Path(tmp) / "merged"
+        model.save_pretrained(checkpoint)
+        processor.save_pretrained(checkpoint)
+
+        logger.info("Exporting ONNX via optimum main_export → %s", output_dir)
+        main_export(
+            model_name_or_path=str(checkpoint),
+            output=output_dir,
+            task="automatic-speech-recognition",
+            no_post_process=True,  # skip decoder_model_merged.onnx (needs use_cache_branch)
+        )
+
+    # optimum may nest outputs in an onnx/ subfolder depending on version
+    alt = output_dir / "onnx"
+    if alt.is_dir():
+        for f in alt.glob("*.onnx*"):
+            shutil.move(str(f), str(output_dir / f.name))
 
     encoder = output_dir / "encoder_model.onnx"
-    decoder = output_dir / "decoder_model.onnx"
-    if not encoder.exists() or not decoder.exists():
-        # optimum may nest in onnx/ subfolder
-        alt = output_dir / "onnx"
-        if (alt / "encoder_model.onnx").exists():
-            for f in alt.glob("*.onnx"):
-                shutil.move(str(f), str(output_dir / f.name))
-        encoder = output_dir / "encoder_model.onnx"
-        decoder = output_dir / "decoder_model.onnx"
+    if not encoder.is_file():
+        raise FileNotFoundError(f"ONNX export produced no encoder_model.onnx in {output_dir}")
 
-    if not encoder.exists() or not decoder.exists():
-        raise FileNotFoundError("ONNX export did not produce encoder/decoder files")
+    # Prefer the plain cacheless decoder; fall back to whatever decoder graph exists
+    # so a version change surfaces as a clear name rather than a missing-file error.
+    decoder = next(
+        (
+            output_dir / name
+            for name in ("decoder_model.onnx", "decoder_model_merged.onnx")
+            if (output_dir / name).is_file()
+        ),
+        None,
+    )
+    if decoder is None:
+        produced = sorted(p.name for p in output_dir.glob("*.onnx"))
+        raise FileNotFoundError(f"ONNX export produced no decoder graph. Got: {produced}")
+    logger.info("ONNX export produced encoder=%s decoder=%s", encoder.name, decoder.name)
 
     # Save processor artifacts for mobile tokenizer ids
     processor.save_pretrained(output_dir)
