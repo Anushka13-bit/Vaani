@@ -50,7 +50,7 @@ chmod +x scripts/download_wakeword_models.sh
 ./scripts/download_wakeword_models.sh
 ```
 
-Train custom **Hey Lily**: see `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`
+Train custom **Hey Barfi**: see `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`
 
 ## Step 4 — Build & run app
 
