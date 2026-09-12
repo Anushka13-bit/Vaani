@@ -73,21 +73,62 @@ class OnnxRuntimeHolder private constructor(
             instance = null
         }
 
+        /**
+         * Sentinel file that turns on ORT profiling for the next session:
+         *   adb shell run-as com.vaanimitra touch files/ort_profile.on
+         * Off by default and free when absent, so this costs nothing in normal use.
+         */
+        private const val PROFILE_SENTINEL = "ort_profile.on"
+
+        fun profilingEnabled(context: Context): Boolean =
+            File(context.filesDir, PROFILE_SENTINEL).exists()
+
         private fun createSession(
             context: Context,
             modelFile: File,
         ): Pair<OrtSession, String> {
             val env = OrtEnvironment.getEnvironment()
             val opts = OrtSession.SessionOptions()
+            // "requested" — registering the provider is NOT proof any node runs on it.
+            // ORT partitions per node at load time and silently drops unsupported ops
+            // back to CPU, so the only honest label here is what we asked for.
             var ep = "CPU"
             try {
                 opts.addNnapi()
-                ep = "NNAPI"
+                ep = "NNAPI-requested"
             } catch (e: Exception) {
                 Log.w(TAG, "NNAPI unavailable: ${e.message}")
             }
+            if (profilingEnabled(context)) {
+                val prefix = File(context.filesDir, "ort_profile_${modelFile.nameWithoutExtension}")
+                opts.enableProfiling(prefix.absolutePath)
+                Log.i(TAG, "ORT profiling enabled -> $prefix*.json")
+            }
             val session = env.createSession(modelFile.absolutePath, opts)
             return Pair(session, ep)
+        }
+    }
+
+    /**
+     * Ends profiling and logs how many executed nodes each provider actually got.
+     * This is the only way to tell NPU/NNAPI execution from a silent CPU fallback —
+     * the EP string alone reflects what was requested, not what ran.
+     */
+    fun reportEpPlacement(context: Context) {
+        if (!profilingEnabled(context)) return
+        try {
+            for ((label, session) in listOf("encoder" to encoderSession, "decoder" to decoderSession)) {
+                val path = session.endProfiling()
+                val json = File(path).takeIf { it.isFile }?.readText() ?: continue
+                val tally = Regex("\"provider\"\\s*:\\s*\"([A-Za-z]+)\"")
+                    .findAll(json)
+                    .map { it.groupValues[1] }
+                    .groupingBy { it }
+                    .eachCount()
+                Log.i(TAG, "EP placement [$label]: ${tally.ifEmpty { mapOf("unknown" to 0) }}")
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "EP placement report failed: ${e.message}")
         }
     }
 

@@ -54,6 +54,7 @@ class OnnxWhisperRuntime(
             WhisperTokenizer.load(bundleDir, adapterId)
             val text = WhisperTokenizer.decode(tokens.drop(4))
             val avgLog = if (logProbs.isEmpty()) -1f else logProbs.average().toFloat()
+            holder.reportEpPlacement(context)
             return DecodeResult(text.trim(), avgLog, holder.executionProvider)
         } finally {
             encoderOut.close()
