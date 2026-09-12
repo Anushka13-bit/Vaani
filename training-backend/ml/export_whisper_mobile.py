@@ -274,7 +274,12 @@ def main() -> None:
     (output_dir / "mobile_manifest.json").write_text(json.dumps(manifest, indent=2))
 
     build_bundle(output_dir, adapter_id, args.quantize)
-    logger.info("Done. Deploy mobile_bundle.zip via GET /v1/adapters/%s/mobile", adapter_id)
+    logger.info(
+        "Done — bundle written to disk on THIS machine. Nothing has been sent to the phone yet; "
+        "the phone must pull it from GET /v1/adapters/%s/mobile "
+        "(Settings -> Download Voice Model, or the calibration polling flow).",
+        adapter_id,
+    )
     if sanity.get("outputs_differ"):
         logger.info("Sanity OK: merged model output differs from base-only")
     elif not sanity.get("skipped"):
