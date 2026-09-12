@@ -9,9 +9,11 @@ This document describes the complete 7-step calibration pipeline for VaaniMitra,
 ```
 [Phone (Patient)]
    │
-   ├─ Step 1: AudioRecord 16kHz mono 16-bit PCM → /files/calibration/{session_id}/phrase_NN.wav + manifest.json
+   ├─ Step 1: react-native-audio-recorder-player records each prompt (16kHz mono PCM WAV),
+   │          CalibrationScreen.tsx uploads one sample at a time
    │
-   ├─ Step 2: Single Batched Multipart POST (session_id + manifest + 40 WAVs)
+   ├─ Step 2: Per-sample multipart POST /v1/calibration/sessions/{id}/samples
+   │          (DEFAULT_SAMPLE_COUNT=40 prompts per session, prompt_set_id="torgo_en_v1")
    │          to configurable Base URL (http://127.0.0.1:8000 via adb reverse / 10.0.2.2 on emulator)
    ▼
 [Laptop Backend (FastAPI)]
@@ -22,7 +24,7 @@ This document describes the complete 7-step calibration pipeline for VaaniMitra,
    ├─ Step 4: Local Fine-Tune (Mac M3 / MPS)
    │          • PYTORCH_ENABLE_MPS_FALLBACK=1
    │          • device = "mps" (or "cpu")
-   │          • Warm-starts from base Whisper-small + merged TORGO cluster adapter
+   │          • Warm-starts from base Whisper-small + merged TORGO adapter (flat, global — not cluster-selected)
    │          • Freezes encoder; trains decoder-only LoRA (r=4, alpha=8, q_proj/v_proj)
    │          • 4 epochs, step-by-step loss logging
    │          • Status progression: "queued" → "training" → "exporting" → "ready" (or "failed")
@@ -65,8 +67,8 @@ caffeinate -d -i -m -u uvicorn app.main:app --reload --port 8000
 ### 2. Pre-Baked Demo Fallback Path
 If local training fails (e.g., laptop offline, network drop, missing weights, or training timeout), the mobile app has an **automatic demo fallback**:
 - In `CalibrationScreen.tsx`, upon timeout, 501, or status="failed", the app catches the condition and immediately triggers `loadClusterAdapter()`.
-- `loadClusterAdapter()` downloads and activates the pre-baked cluster adapter (`torgo_cluster_english_v1`).
-- **Prerequisite for Fallback**: Ensure `ml/mobile_export/torgo_cluster_english_v1/mobile_bundle.zip` is built and present on the server so the cluster fallback bundle can be served.
+- `loadClusterAdapter()` downloads and activates the pre-baked TORGO adapter (`torgo_base_adapter_english_v1`) — a flat global adapter, not a cluster selection.
+- **Prerequisite for Fallback**: Ensure `ml/mobile_export/torgo_base_adapter_english_v1/mobile_bundle.zip` is built and present on the server so the cluster fallback bundle can be served.
 
 ### 3. Qualcomm QNN Context Binary vs Android NNAPI
 - **Current Mobile Runtime**: The Android app uses Microsoft ONNX Runtime Mobile with the **Android NNAPI Execution Provider** (`opts.addNnapi()`), which utilizes the device NPU and GPU acceleration on Android devices (Qualcomm Hexagon, MediaTek APU, Samsung NPU) with automatic CPU fallback.
@@ -78,8 +80,8 @@ If local training fails (e.g., laptop offline, network drop, missing weights, or
 
 | Step | Component | Requirement | Repo Status |
 |---|---|---|---|
-| **1. Storage on Phone** | `AudioCaptureManager.kt`, `SpeechModule.kt` | 16kHz mono 16-bit PCM WAV directly; written to app-private `/files/calibration/{session_id}/phrase_NN.wav`; `manifest.json` written alongside them. | **Implemented & Verified** |
-| **2. Transfer Phone → Laptop** | `CalibrationScreen.tsx`, `SpeechBridge.ts` | Single batched multipart request (`session_id` + `manifest` + all 40 clips) to configurable base URL (default `127.0.0.1:8000`). | **Implemented & Verified** |
+| **1. Storage on Phone** | `CalibrationScreen.tsx` (`react-native-audio-recorder-player`) | 16kHz mono PCM WAV per prompt, uploaded immediately after each recording. (A native `AudioRecord`-based batch recorder + `manifest.json` path existed but was dead code — nothing called it — and has been removed; the general-purpose `AudioCaptureManager` used by the runtime wake-word/dictation pipeline is unaffected.) | **Implemented (JS path) & Verified** |
+| **2. Transfer Phone → Laptop** | `CalibrationScreen.tsx`, `trainingBackendClient.ts` | Per-sample multipart POST to `/v1/calibration/sessions/{id}/samples`, `DEFAULT_SAMPLE_COUNT=40` prompts per session (`prompt_set_id="torgo_en_v1"`), to configurable base URL (default `127.0.0.1:8000`). | **Implemented & Verified** |
 | **3. Receive on Laptop** | `app/routers/calibrate.py` | `POST /calibrate` receives clips + manifest, saves to `./sessions/{session_id}/`, returns 202 immediately via `BackgroundTasks`. | **Implemented & Verified** |
 | **4. Train Locally** | `ml/run_finetune.py`, `app/workers/train_worker.py` | `PYTORCH_ENABLE_MPS_FALLBACK=1`; `device = "mps"`; merges TORGO adapter; freezes encoder; LoRA r=4, alpha=8; logs step loss; writes `status.json`. | **Implemented & Verified** |
 | **5. Convert for Mobile** | `ml/export_whisper_mobile.py` | Exports ONNX, dynamic INT8 quantization matching TORGO, packages `mobile_bundle.zip` for NNAPI NPU acceleration. | **Implemented & Verified** |

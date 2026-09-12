@@ -25,7 +25,16 @@ import { colors } from '../theme/colors';
 
 const recorder = new AudioRecorderPlayer();
 const POLL_INTERVAL_MS = 3000;
-const POLL_TIMEOUT_MS = 30 * 60 * 1000; // 30 min max for local fine-tune
+// Expected training time is ~2-6 min (M3/MPS, small calibration sessions). 10 min gives
+// margin over that without leaving a live demo stalled for 30 min if training hangs.
+const POLL_TIMEOUT_MS = 10 * 60 * 1000;
+// Tolerate brief network blips (e.g. a USB/hotspot hiccup) without aborting the whole
+// flow — only treat the laptop as unreachable after this many consecutive failed polls.
+const MAX_CONSECUTIVE_POLL_FAILURES = 5; // ~15s of sustained unreachability at 3s interval
+
+// Full 40-prompt calibration session (prompt_set_id="torgo_en_v1") for best LoRA
+// personalization quality. Keep in sync with backend app/config.py DEFAULT_SAMPLE_COUNT.
+const SESSION_PROMPT_COUNT = 40;
 
 // Offline fallback prompts — used when the training backend is unreachable
 const OFFLINE_PROMPTS: Prompt[] = [
@@ -75,6 +84,7 @@ export default function CalibrationScreen({ navigation }: any) {
   const [isOfflineMode, setIsOfflineMode] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const pollStartRef = useRef<number>(0);
+  const consecutivePollFailuresRef = useRef<number>(0);
 
   const clearPoll = useCallback(() => {
     if (pollRef.current) {
@@ -116,7 +126,7 @@ export default function CalibrationScreen({ navigation }: any) {
         }
       }
 
-      const resp = await backendClient.calibration.getPrompts(preferredLanguage, 5);
+      const resp = await backendClient.calibration.getPrompts(preferredLanguage, SESSION_PROMPT_COUNT);
       setPrompts(resp.prompts);
       setPromptSetId(resp.prompt_set_id);
 
@@ -181,14 +191,23 @@ export default function CalibrationScreen({ navigation }: any) {
     sid: string,
   ) => {
     try {
-      const handle = await downloadAndLoadUserAdapter(uid, adapterId, version, sid);
+      // Pass the last calibration recording as a reference clip so the native side can
+      // run a real before/after transcription check on this patient's own dysarthric
+      // speech, not silently trust that the swap worked.
+      const handle = await downloadAndLoadUserAdapter(
+        uid,
+        adapterId,
+        version,
+        sid,
+        lastRecordingUri ?? undefined,
+      );
       setActiveAdapters([handle]);
       setPhase('done');
     } catch (e: any) {
       console.warn('[CalibrationScreen] User adapter load failed, falling back to cluster:', e?.message);
       await loadClusterAdapter();
     }
-  }, [loadClusterAdapter, setActiveAdapters]);
+  }, [loadClusterAdapter, setActiveAdapters, lastRecordingUri]);
 
   const triggerAndPollTraining = useCallback(async () => {
     if (!sessionId || !userId) {
@@ -221,6 +240,7 @@ export default function CalibrationScreen({ navigation }: any) {
     }
 
     pollStartRef.current = Date.now();
+    consecutivePollFailuresRef.current = 0;
     pollRef.current = setInterval(async () => {
       if (Date.now() - pollStartRef.current > POLL_TIMEOUT_MS) {
         clearPoll();
@@ -239,6 +259,7 @@ export default function CalibrationScreen({ navigation }: any) {
           backendClient.calibration.getStatus(sessionId),
           backendClient.calibration.getSessionAdapterStatus(sessionId).catch(() => null),
         ]);
+        consecutivePollFailuresRef.current = 0;
 
         const progress = adapterStatus?.progress_pct ?? calStatus.progress_pct;
         setTrainingProgress(progress);
@@ -275,9 +296,26 @@ export default function CalibrationScreen({ navigation }: any) {
         }
       } catch (pollErr: any) {
         if (isNetworkError(pollErr)) {
-          clearPoll();
-          setErrorMsg(networkErrorMessage());
-          setPhase('error');
+          consecutivePollFailuresRef.current += 1;
+          console.warn(
+            '[CalibrationScreen] Poll network error (%d/%d):',
+            consecutivePollFailuresRef.current,
+            MAX_CONSECUTIVE_POLL_FAILURES,
+            pollErr?.message,
+          );
+          // Tolerate brief blips silently; only give up after sustained unreachability,
+          // and fall back automatically (consistent with the failed/timeout/501 paths)
+          // rather than stranding the user on a manual-retry error screen mid-demo.
+          if (consecutivePollFailuresRef.current >= MAX_CONSECUTIVE_POLL_FAILURES) {
+            clearPoll();
+            try {
+              setTrainingMessage('Lost connection to laptop — loading cluster fallback…');
+              await loadClusterAdapter();
+            } catch (clusterErr: any) {
+              setErrorMsg(`${networkErrorMessage()}\n\nFallback also failed: ${clusterErr?.message}`);
+              setPhase('error');
+            }
+          }
         } else {
           console.warn('[CalibrationScreen] Poll error:', pollErr?.message);
         }

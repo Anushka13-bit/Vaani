@@ -4,11 +4,16 @@ Scans ml/adapters/ at server startup. Any subdirectory containing a valid
 adapter_manifest.json is upserted into the adapters DB table.
 
 This is the static seed path:
-  training-backend/ml/adapters/torgo_cluster_english_v1/
+  training-backend/ml/adapters/torgo_base_adapter_english_v1/
       adapter_manifest.json   ← defines type, language_code, etc.
       adapter_model.bin       ← drop your trained weights here
 
-The registry also serves GET /v1/adapters/clusters?language=en → torgo_cluster_english_v1.
+Despite the "clusters" endpoint name (kept as future-facing scaffolding for
+severity-based selection), there is currently only one flat, global TORGO
+adapter registered here (severity_cluster=null) — the abnerh/TORGO-database
+mirror used to train it has no severity/speaker labels to cluster on.
+
+The registry serves GET /v1/adapters/clusters?language=en → torgo_base_adapter_english_v1.
 """
 from __future__ import annotations
 

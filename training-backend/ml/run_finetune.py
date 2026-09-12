@@ -42,13 +42,13 @@ def _sync_db_session():
     return sessionmaker(bind=engine, expire_on_commit=False)()
 
 
-def _resolve_cluster_adapter_dir() -> Path:
-    cluster_id = settings.CLUSTER_WARM_START_ADAPTER
-    path = settings.ADAPTERS_DIR / cluster_id
+def _resolve_warm_start_adapter_dir() -> Path:
+    adapter_id = settings.WARM_START_ADAPTER_ID
+    path = settings.ADAPTERS_DIR / adapter_id
     if not (path / "adapter_manifest.json").is_file():
         raise FileNotFoundError(
-            f"Cluster warm-start adapter not found: {path}. "
-            "Drop TORGO weights into ml/adapters/torgo_cluster_english_v1/"
+            f"Warm-start adapter not found: {path}. "
+            "Drop TORGO weights into ml/adapters/torgo_base_adapter_english_v1/"
         )
     weights = path / "adapter_model.safetensors"
     if not weights.is_file():
@@ -122,10 +122,10 @@ def _train_user_lora(
     device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
     logger.info("Using device for fine-tuning: %s", device)
 
-    logger.info("Loading base Whisper + merging cluster adapter from %s", warm_start_dir)
+    logger.info("Loading base Whisper + merging warm-start TORGO adapter from %s", warm_start_dir)
     base = WhisperForConditionalGeneration.from_pretrained(base_model)
-    merged_cluster = PeftModel.from_pretrained(base, str(warm_start_dir))
-    model = merged_cluster.merge_and_unload()
+    merged_base = PeftModel.from_pretrained(base, str(warm_start_dir))
+    model = merged_base.merge_and_unload()
     model.train()
 
     # Freeze encoder — decoder-only LoRA fine-tune
@@ -295,7 +295,7 @@ def _register_user_adapter(
         "base_model": settings.WHISPER_BASE_MODEL,
         "version": 1,
         "weights_file": "adapter_model.safetensors",
-        "parent_adapter_id": settings.CLUSTER_WARM_START_ADAPTER,
+        "parent_adapter_id": settings.WARM_START_ADAPTER_ID,
     }
     weights = dest / "adapter_model.safetensors"
     if not weights.is_file():
@@ -320,7 +320,7 @@ def _register_user_adapter(
                     user_id=user_id,
                     language_code="en",
                     base_model=settings.WHISPER_BASE_MODEL,
-                    parent_adapter_id=settings.CLUSTER_WARM_START_ADAPTER,
+                    parent_adapter_id=settings.WARM_START_ADAPTER_ID,
                     version=1,
                     storage_path=str(dest / manifest["weights_file"]),
                     checksum=checksum,
@@ -366,7 +366,7 @@ def run_finetune(session_id: str, user_id: str, job_id: str | None = None) -> di
         )
 
         pairs = _load_calibration_pairs(session_id)
-        warm_start = _resolve_cluster_adapter_dir()
+        warm_start = _resolve_warm_start_adapter_dir()
         work_dir = settings.SESSIONS_DIR / session_id / "training"
         if work_dir.exists():
             shutil.rmtree(work_dir)

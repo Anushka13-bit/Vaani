@@ -71,7 +71,7 @@ object VoicePipeline {
 
         adapterManager.restorePersistedStack()
         val activeAdapter = adapterManager.currentStackedAdapters().firstOrNull()
-        val adapterId = activeAdapter?.adapterId ?: "torgo_cluster_english_v1"
+        val adapterId = activeAdapter?.adapterId ?: "torgo_base_adapter_english_v1"
 
         // VAD-gated capture with 8s hard timeout — returns to wake listening on silence/timeout
         val pcm = withTimeoutOrNull(LISTEN_TIMEOUT_MS) {

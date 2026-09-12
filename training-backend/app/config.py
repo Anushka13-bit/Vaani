@@ -43,8 +43,10 @@ class Settings(BaseSettings):
     # Must match the model your LoRA adapters were trained against.
     WHISPER_BASE_MODEL: str = "openai/whisper-small"
 
-    # Cluster adapter used as warm-start for per-user fine-tune (TORGO English).
-    CLUSTER_WARM_START_ADAPTER: str = "torgo_cluster_english_v1"
+    # Flat global TORGO adapter used as warm-start for per-user fine-tune (TORGO English).
+    # Not cluster-selected — this mirror of abnerh/TORGO-database has no severity/speaker
+    # labels, so there is only ever one global adapter here.
+    WARM_START_ADAPTER_ID: str = "torgo_base_adapter_english_v1"
 
     # ── Training ─────────────────────────────────────────────────────────────
     # Local laptop fine-tune. Requires: pip install -r ml/requirements-training.txt
@@ -57,7 +59,11 @@ class Settings(BaseSettings):
     AUDIO_RETENTION_DAYS: int = 30
 
     # ── Calibration prompts ───────────────────────────────────────────────────
-    DEFAULT_SAMPLE_COUNT: int = 5
+    # Number of prompts CalibrationScreen.tsx requests per session. All 40 seeded
+    # English prompts (prompt_set_id="torgo_en_v1") are used for full LoRA
+    # personalization quality. Each prompt is a full record-stop-upload cycle,
+    # so lowering this trades personalization quality for a shorter session.
+    DEFAULT_SAMPLE_COUNT: int = 40
 
 
 settings = Settings()

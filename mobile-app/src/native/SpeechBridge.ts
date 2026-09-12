@@ -24,19 +24,35 @@ export const SpeechBridge = {
   loadLanguageAdapter: (languageCode: string): Promise<AdapterHandle> =>
     SpeechModule.loadLanguageAdapter(languageCode),
 
+  /**
+   * `referenceAudioPath`: when set for a USER adapter, the native side runs a real
+   * before/after transcription comparison on that clip (16kHz mono PCM WAV) as part of
+   * the swap, and the result carries `verified`/`transcriptChanged`/`usedNpuAfterSwap`.
+   * Pass '' to skip verification (e.g. for CLUSTER/LANGUAGE loads with no reference clip).
+   */
   downloadAndLoadMobileBundle: (
     downloadUrl: string,
     authToken: string,
     adapterId: string,
     version: number,
     adapterType: 'USER' | 'CLUSTER' | 'LANGUAGE',
-  ): Promise<AdapterHandle> =>
+    referenceAudioPath?: string,
+  ): Promise<AdapterHandle & {
+    verified?: boolean;
+    transcriptChanged?: boolean;
+    previousText?: string;
+    newText?: string;
+    previousExecutionProvider?: string;
+    newExecutionProvider?: string;
+    usedNpuAfterSwap?: boolean;
+  }> =>
     SpeechModule.downloadAndLoadMobileBundle(
       downloadUrl,
       authToken,
       adapterId,
       version,
       adapterType,
+      referenceAudioPath ?? '',
     ),
 
   downloadAndLoadClusterAdapter: (
@@ -97,46 +113,6 @@ export const SpeechBridge = {
 
   getWakeWordStopReason: (): Promise<string> =>
     SpeechModule.getWakeWordStopReason(),
-
-  startCalibrationRecording: (
-    sessionId: string,
-    phraseIndex: number,
-    promptText: string,
-  ): Promise<boolean> =>
-    SpeechModule.startCalibrationRecording(sessionId, phraseIndex, promptText),
-
-  stopCalibrationRecording: (
-    sessionId: string,
-    phraseIndex: number,
-    promptText: string,
-  ): Promise<{
-    sessionId: string;
-    phraseIndex: number;
-    fileName: string;
-    filePath: string;
-    fileSize: number;
-    promptText: string;
-    manifestPath: string;
-  }> =>
-    SpeechModule.stopCalibrationRecording(sessionId, phraseIndex, promptText),
-
-  uploadCalibrationBatch: (
-    sessionId: string,
-    baseUrl: string,
-    authToken = '',
-  ): Promise<string> =>
-    SpeechModule.uploadCalibrationBatch(sessionId, baseUrl, authToken),
-
-  getCalibrationSessionFiles: (
-    sessionId: string,
-  ): Promise<{
-    sessionId: string;
-    clips: Array<{ name: string; path: string; size: number }>;
-    clipCount: number;
-    hasManifest: boolean;
-    manifestPath: string;
-  }> =>
-    SpeechModule.getCalibrationSessionFiles(sessionId),
 
   onTranscriptSegment: (
     callback: (segment: TranscriptSegment) => void,

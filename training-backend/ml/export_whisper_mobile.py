@@ -5,8 +5,8 @@ VaaniMitra — Export merged TORGO LoRA Whisper to a mobile ONNX bundle.
 Usage (from training-backend/, with GPU optional):
   pip install -r ml/requirements-export.txt
   python ml/export_whisper_mobile.py \\
-    --adapter-dir ml/adapters/torgo_cluster_english_v1 \\
-    --output-dir ml/mobile_export/torgo_cluster_english_v1
+    --adapter-dir ml/adapters/torgo_base_adapter_english_v1 \\
+    --output-dir ml/mobile_export/torgo_base_adapter_english_v1
 
 Produces:
   mobile_export/<adapter_id>/

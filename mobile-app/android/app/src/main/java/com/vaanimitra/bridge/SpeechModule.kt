@@ -7,6 +7,7 @@ import com.vaanimitra.nlu.PhrasebookSync
 import com.vaanimitra.stt.AdapterDownloader
 import com.vaanimitra.stt.AdapterHandle
 import com.vaanimitra.stt.AdapterType
+import com.vaanimitra.stt.AdapterVerificationResult
 import com.vaanimitra.stt.ModelBundleManager
 import com.vaanimitra.stt.OnnxRuntimeHolder
 import com.vaanimitra.util.PermissionHelper
@@ -34,117 +35,11 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     private val adapterManager by lazy { VaaniMitraComponents.adapterManager(reactContext) }
     private val whisperEngine by lazy { VaaniMitraComponents.whisperEngine(reactContext) }
     private val phrasebookMatcher by lazy { VaaniMitraComponents.phrasebookMatcher() }
-    private val audioCaptureManager by lazy { VaaniMitraComponents.audioCaptureManager() }
     private val scope = CoroutineScope(Dispatchers.Main)
 
     @ReactMethod
     fun ping(promise: Promise) {
         promise.resolve("pong")
-    }
-
-    @ReactMethod
-    fun startCalibrationRecording(
-        sessionId: String,
-        phraseIndex: Int,
-        promptText: String,
-        promise: Promise,
-    ) {
-        try {
-            if (!PermissionHelper.hasVoicePermissions(reactContext)) {
-                promise.reject("PERMISSION_DENIED", "Microphone permission required for calibration")
-                return
-            }
-            audioCaptureManager.startCalibrationRecording()
-            promise.resolve(true)
-        } catch (e: Exception) {
-            Log.e(TAG, "startCalibrationRecording error: ${e.message}")
-            promise.reject("CALIBRATION_RECORD_START_FAILED", e.message, e)
-        }
-    }
-
-    @ReactMethod
-    fun stopCalibrationRecording(
-        sessionId: String,
-        phraseIndex: Int,
-        promptText: String,
-        promise: Promise,
-    ) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val phraseFile = com.vaanimitra.audio.CalibrationStorageManager.getPhraseFile(
-                    reactContext, sessionId, phraseIndex
-                )
-                val bytesSaved = audioCaptureManager.stopCalibrationRecordingAndSaveWav(phraseFile)
-                com.vaanimitra.audio.CalibrationStorageManager.updateManifest(
-                    reactContext, sessionId, phraseFile.name, promptText
-                )
-
-                val manifestFile = com.vaanimitra.audio.CalibrationStorageManager.getManifestFile(
-                    reactContext, sessionId
-                )
-                val map = Arguments.createMap().apply {
-                    putString("sessionId", sessionId)
-                    putInt("phraseIndex", phraseIndex)
-                    putString("fileName", phraseFile.name)
-                    putString("filePath", phraseFile.absolutePath)
-                    putDouble("fileSize", bytesSaved.toDouble())
-                    putString("promptText", promptText)
-                    putString("manifestPath", manifestFile.absolutePath)
-                }
-                promise.resolve(map)
-            } catch (e: Exception) {
-                Log.e(TAG, "stopCalibrationRecording error: ${e.message}")
-                promise.reject("CALIBRATION_RECORD_STOP_FAILED", e.message, e)
-            }
-        }
-    }
-
-    @ReactMethod
-    fun uploadCalibrationBatch(
-        sessionId: String,
-        baseUrl: String,
-        authToken: String,
-        promise: Promise,
-    ) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val responseJson = com.vaanimitra.audio.CalibrationStorageManager.uploadBatch(
-                    reactContext, sessionId, baseUrl, authToken
-                )
-                promise.resolve(responseJson)
-            } catch (e: Exception) {
-                Log.e(TAG, "uploadCalibrationBatch error: ${e.message}")
-                promise.reject("CALIBRATION_BATCH_UPLOAD_FAILED", e.message, e)
-            }
-        }
-    }
-
-    @ReactMethod
-    fun getCalibrationSessionFiles(sessionId: String, promise: Promise) {
-        scope.launch(Dispatchers.IO) {
-            try {
-                val clips = com.vaanimitra.audio.CalibrationStorageManager.getSessionClips(reactContext, sessionId)
-                val manifestFile = com.vaanimitra.audio.CalibrationStorageManager.getManifestFile(reactContext, sessionId)
-                val array = Arguments.createArray()
-                clips.forEach { file ->
-                    array.pushMap(Arguments.createMap().apply {
-                        putString("name", file.name)
-                        putString("path", file.absolutePath)
-                        putDouble("size", file.length().toDouble())
-                    })
-                }
-                val map = Arguments.createMap().apply {
-                    putString("sessionId", sessionId)
-                    putArray("clips", array)
-                    putInt("clipCount", clips.size)
-                    putBoolean("hasManifest", manifestFile.exists())
-                    putString("manifestPath", manifestFile.absolutePath)
-                }
-                promise.resolve(map)
-            } catch (e: Exception) {
-                promise.reject("GET_CALIBRATION_FILES_FAILED", e.message, e)
-            }
-        }
     }
 
     @ReactMethod
@@ -183,16 +78,30 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
         adapterId: String,
         version: Int,
         adapterType: String,
+        referenceAudioPath: String,
         promise: Promise,
     ) {
         scope.launch(Dispatchers.IO) {
             try {
                 val type = AdapterType.valueOf(adapterType.uppercase())
-                val handle = downloadExtractAndActivate(downloadUrl, authToken, adapterId, version, type)
+                val (handle, verification) = downloadExtractAndActivate(
+                    downloadUrl, authToken, adapterId, version, type, referenceAudioPath,
+                )
                 promise.resolve(adapterHandleToMap(handle).apply {
                     putString("executionProvider", whisperEngine.executionProvider)
                     putString("bundlePath", handle.filePath)
                     putBoolean("mergedLora", true)
+                    if (verification != null) {
+                        putBoolean("verified", true)
+                        putBoolean("transcriptChanged", verification.transcriptChanged)
+                        putString("previousText", verification.previousText)
+                        putString("newText", verification.newText)
+                        putString("previousExecutionProvider", verification.previousExecutionProvider)
+                        putString("newExecutionProvider", verification.newExecutionProvider)
+                        putBoolean("usedNpuAfterSwap", verification.usedNpuAfterSwap)
+                    } else {
+                        putBoolean("verified", false)
+                    }
                 })
             } catch (e: Exception) {
                 Log.e(TAG, "downloadAndLoadMobileBundle failed: ${e.message}")
@@ -217,8 +126,8 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
                     clusterAdapterId = serverAdapterId,
                     clusterVersion = version,
                 )
-                val handle = downloadExtractAndActivate(
-                    mobileBundleUrl, authToken, serverAdapterId, version, AdapterType.CLUSTER,
+                val (handle, _) = downloadExtractAndActivate(
+                    mobileBundleUrl, authToken, serverAdapterId, version, AdapterType.CLUSTER, "",
                 )
                 promise.resolve(adapterHandleToMap(handle))
             } catch (e: Exception) {
@@ -239,8 +148,8 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
             try {
                 val adapterId = "user_$userId"
                 adapterManager.persistActiveConfig(userId = userId, onnxAdapterId = adapterId)
-                val handle = downloadExtractAndActivate(
-                    downloadUrl, authToken, adapterId, version, AdapterType.USER,
+                val (handle, _) = downloadExtractAndActivate(
+                    downloadUrl, authToken, adapterId, version, AdapterType.USER, "",
                 )
                 promise.resolve(adapterHandleToMap(handle))
             } catch (e: Exception) {
@@ -249,19 +158,35 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
         }
     }
 
-    private fun downloadExtractAndActivate(
+    /**
+     * Downloads and extracts the ONNX bundle, then activates it. When [referenceAudioPath]
+     * is non-blank and [type] is USER, the swap runs through [AdapterManager.loadOnnxAdapterVerified]
+     * so callers get a real before/after transcription comparison rather than a load that
+     * could silently no-op.
+     */
+    private suspend fun downloadExtractAndActivate(
         url: String,
         authToken: String,
         adapterId: String,
         version: Int,
         type: AdapterType,
-    ): AdapterHandle {
+        referenceAudioPath: String,
+    ): Pair<AdapterHandle, AdapterVerificationResult?> {
         val bytes = AdapterDownloader.downloadBytes(url, authToken)
         val bundleDir = ModelBundleManager.bundleDir(reactContext, adapterId)
         ModelBundleManager.extractZip(bytes, bundleDir)
         adapterManager.persistOnnxAdapter(adapterId, version, type)
+
+        if (type == AdapterType.USER && referenceAudioPath.isNotBlank()) {
+            val verification = adapterManager.loadOnnxAdapterVerified(adapterId, type, version, referenceAudioPath)
+            val handle = adapterManager.currentStackedAdapters().lastOrNull { it.adapterId == adapterId }
+                ?: AdapterHandle(adapterId, version, type, bundleDir.absolutePath, "")
+            return handle to verification
+        }
+
         activateOnnxBundle(adapterId)
-        return adapterManager.loadOnnxAdapter(adapterId, type, version)
+        val handle = adapterManager.loadOnnxAdapter(adapterId, type, version)
+        return handle to null
     }
 
     private fun activateOnnxBundle(adapterId: String) {

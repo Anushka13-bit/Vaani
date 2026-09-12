@@ -42,7 +42,7 @@ Mainstream voice assistants have documented failure rates on dysarthric speech. 
 - 🏠 Basic smart-home style actions
 
 ### Personalization
-- 🧠 Calibration flow: record ~40 short phrases → **local fine-tune on your laptop** → download personalized ONNX bundle
+- 🧠 Calibration flow: record 40 short phrases → **local fine-tune on your laptop** → download personalized ONNX bundle
 - 🚀 **Cluster-adapter warm start** — per-user LoRA fine-tunes from merged TORGO weights, not raw Whisper
 - 📦 **Merged ONNX bundle** — LoRA is baked into a single on-device Whisper ONNX package (no runtime adapter stacking)
 - 🔄 **Cluster fallback** — if training fails or times out, app auto-loads the pre-baked cluster adapter
@@ -240,7 +240,7 @@ Audio never leaves your machine. Set `API_HOST` in `mobile-app/src/config/backen
 - Python 3.10+, Node 20 recommended, Android SDK
 - Physical Android device + USB cable (or emulator)
 - ~4 GB disk for training/export deps + ONNX models
-- TORGO cluster weights in `training-backend/ml/adapters/torgo_cluster_english_v1/`
+- TORGO cluster weights in `training-backend/ml/adapters/torgo_base_adapter_english_v1/`
 
 ### 1. Training backend
 
@@ -273,8 +273,8 @@ cd training-backend
 python -m venv .venv-export && source .venv-export/bin/activate
 pip install -r ml/requirements-export.txt
 python ml/export_whisper_mobile.py \
-  --adapter-dir ml/adapters/torgo_cluster_english_v1 \
-  --output-dir ml/mobile_export/torgo_cluster_english_v1 \
+  --adapter-dir ml/adapters/torgo_base_adapter_english_v1 \
+  --output-dir ml/mobile_export/torgo_base_adapter_english_v1 \
   --quantize
 ```
 

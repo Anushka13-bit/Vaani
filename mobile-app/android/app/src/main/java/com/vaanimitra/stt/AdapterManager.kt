@@ -2,6 +2,7 @@ package com.vaanimitra.stt
 
 import android.content.Context
 import android.util.Log
+import com.vaanimitra.audio.AudioCaptureManager
 import java.io.File
 import java.security.MessageDigest
 
@@ -17,6 +18,23 @@ data class AdapterHandle(
     val type: AdapterType,
     val filePath: String,
     val checksum: String,
+)
+
+/**
+ * Result of transcribing a fixed reference clip before and after an adapter swap.
+ * A no-op swap (identical transcript, same adapter weights effectively active) or a
+ * silent CPU fallback (executionProvider == "CPU" when NPU/NNAPI was expected) would
+ * both pass with no thrown error otherwise — this is what catches that.
+ */
+data class AdapterVerificationResult(
+    val previousAdapterId: String,
+    val newAdapterId: String,
+    val previousText: String,
+    val newText: String,
+    val transcriptChanged: Boolean,
+    val previousExecutionProvider: String,
+    val newExecutionProvider: String,
+    val usedNpuAfterSwap: Boolean,
 )
 
 interface AdapterManagerInterface {
@@ -84,6 +102,111 @@ class AdapterManager(private val context: Context) : AdapterManagerInterface {
         }
 
         return handle
+    }
+
+    /**
+     * Loads [adapterId] like [loadOnnxAdapter], but wraps the swap with a real before/after
+     * transcription test on [referenceAudioPath] (16kHz mono 16-bit PCM WAV) so a silently
+     * no-op adapter load or an unexpected CPU fallback shows up even though no exception
+     * would otherwise be thrown.
+     */
+    suspend fun loadOnnxAdapterVerified(
+        adapterId: String,
+        type: AdapterType,
+        version: Int,
+        referenceAudioPath: String,
+    ): AdapterVerificationResult {
+        val engine = com.vaanimitra.VaaniMitraComponents.whisperEngine(context)
+        val previousAdapterId = engine.activeAdapterId
+        val referencePcm = readWavPcm(File(referenceAudioPath))
+
+        val previousResult = if (referencePcm.isNotEmpty()) {
+            runCatching { engine.transcribe(referencePcm, AudioCaptureManager.SAMPLE_RATE) }
+                .onFailure { Log.w(TAG, "Pre-swap reference transcription failed: ${it.message}") }
+                .getOrNull()
+        } else {
+            Log.w(TAG, "Reference audio empty/unreadable at $referenceAudioPath — skipping pre-swap transcription")
+            null
+        }
+
+        // Perform the actual swap (sets activeAdapterId, releases ONNX sessions).
+        loadOnnxAdapter(adapterId, type, version)
+
+        val newResult = if (referencePcm.isNotEmpty()) {
+            runCatching { engine.transcribe(referencePcm, AudioCaptureManager.SAMPLE_RATE) }
+                .onFailure { Log.e(TAG, "Post-swap reference transcription failed: ${it.message}") }
+                .getOrNull()
+        } else null
+
+        val previousText = previousResult?.text?.trim() ?: ""
+        val newText = newResult?.text?.trim() ?: ""
+        val changed = !previousText.equals(newText, ignoreCase = true)
+        val prevEp = previousResult?.executionProvider ?: "unknown"
+        val newEp = newResult?.executionProvider ?: "unknown"
+        val usedNpu = newEp.contains("NNAPI", ignoreCase = true) || newEp.contains("QNN", ignoreCase = true)
+
+        if (!changed) {
+            Log.w(
+                TAG,
+                "Adapter verification: transcript UNCHANGED after swapping $previousAdapterId -> $adapterId " +
+                    "(text='$newText'). Personalization may not actually be applied.",
+            )
+        }
+        if (newResult != null && !usedNpu) {
+            Log.w(TAG, "Adapter verification: post-swap inference ran on '$newEp', not NPU/NNAPI as expected.")
+        }
+        Log.i(
+            TAG,
+            "Adapter verification $previousAdapterId->$adapterId: changed=$changed " +
+                "prevEP=$prevEp newEP=$newEp prevText='$previousText' newText='$newText'",
+        )
+
+        return AdapterVerificationResult(
+            previousAdapterId = previousAdapterId,
+            newAdapterId = adapterId,
+            previousText = previousText,
+            newText = newText,
+            transcriptChanged = changed,
+            previousExecutionProvider = prevEp,
+            newExecutionProvider = newEp,
+            usedNpuAfterSwap = usedNpu,
+        )
+    }
+
+    /** Reads a 16-bit PCM WAV file's audio samples, skipping past its header (found via the "data" chunk). */
+    private fun readWavPcm(file: File): ShortArray {
+        if (!file.isFile) return ShortArray(0)
+        val bytes = file.readBytes()
+        if (bytes.size < 44) return ShortArray(0)
+
+        // Locate the "data" sub-chunk instead of assuming a fixed 44-byte header, so files
+        // with extra RIFF chunks (e.g. from third-party recorder libraries) still parse correctly.
+        var offset = 12 // past "RIFF"+size+"WAVE"
+        var dataOffset = -1
+        var dataSize = 0
+        while (offset + 8 <= bytes.size) {
+            val chunkId = String(bytes, offset, 4, Charsets.US_ASCII)
+            val chunkSize = (bytes[offset + 4].toInt() and 0xFF) or
+                ((bytes[offset + 5].toInt() and 0xFF) shl 8) or
+                ((bytes[offset + 6].toInt() and 0xFF) shl 16) or
+                ((bytes[offset + 7].toInt() and 0xFF) shl 24)
+            if (chunkId == "data") {
+                dataOffset = offset + 8
+                dataSize = chunkSize
+                break
+            }
+            offset += 8 + chunkSize + (chunkSize and 1) // word-aligned
+        }
+        if (dataOffset < 0) return ShortArray(0)
+
+        val end = minOf(dataOffset + dataSize, bytes.size)
+        val sampleCount = (end - dataOffset) / 2
+        val samples = ShortArray(sampleCount)
+        java.nio.ByteBuffer.wrap(bytes, dataOffset, sampleCount * 2)
+            .order(java.nio.ByteOrder.LITTLE_ENDIAN)
+            .asShortBuffer()
+            .get(samples)
+        return samples
     }
 
     override fun loadUserAdapter(userId: String): AdapterHandle {

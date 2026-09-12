@@ -18,7 +18,7 @@ class WhisperInferenceEngine(private val context: Context) : SttEngine {
     var activeAdapterPath: String? = null
 
     @Volatile
-    var activeAdapterId: String = "torgo_cluster_english_v1"
+    var activeAdapterId: String = "torgo_base_adapter_english_v1"
 
     @Volatile
     var executionProvider: String = "none"

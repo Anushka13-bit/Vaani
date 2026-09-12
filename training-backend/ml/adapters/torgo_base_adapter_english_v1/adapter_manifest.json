@@ -1,5 +1,5 @@
 {
-  "adapter_id": "torgo_cluster_english_v1",
+  "adapter_id": "torgo_base_adapter_english_v1",
   "type": "CLUSTER",
   "language_code": "en",
   "severity_cluster": null,

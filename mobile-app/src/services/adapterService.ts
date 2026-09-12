@@ -28,12 +28,19 @@ export async function downloadAndLoadClusterAdapter(
   return handle;
 }
 
-/** Download per-user ONNX mobile bundle produced by local fine-tune. */
+/**
+ * Download per-user ONNX mobile bundle produced by local fine-tune.
+ * `referenceAudioPath` (typically the phone's last calibration recording) triggers a
+ * real before/after transcription check on-device — if the transcript comes back
+ * unchanged, or execution silently fell back off the NPU, that's logged loudly here
+ * rather than reported as a silent success.
+ */
 export async function downloadAndLoadUserAdapter(
   userId: string,
   adapterId: string,
   version: number,
   sessionId?: string,
+  referenceAudioPath?: string,
 ): Promise<AdapterHandle> {
   const downloadUrl = sessionId
     ? backendClient.calibration.getSessionAdapterDownloadUrl(sessionId)
@@ -45,7 +52,27 @@ export async function downloadAndLoadUserAdapter(
     adapterId,
     version,
     'USER',
+    referenceAudioPath,
   );
+
+  if (handle.verified) {
+    if (!handle.transcriptChanged) {
+      console.warn(
+        '[adapterService] Adapter verification: transcript UNCHANGED after loading',
+        adapterId,
+        '— personalization may not actually be applied. text=',
+        handle.newText,
+      );
+    }
+    if (!handle.usedNpuAfterSwap) {
+      console.warn(
+        '[adapterService] Adapter verification: post-swap inference ran on',
+        handle.newExecutionProvider,
+        '- expected NNAPI/NPU.',
+      );
+    }
+  }
+
   const existing = await LocalDb.loadActiveAdapters();
   const merged = [
     ...existing.filter(a => a.type !== 'USER'),
