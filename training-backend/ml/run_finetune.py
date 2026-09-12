@@ -162,12 +162,40 @@ def _train_user_lora(
     processor = WhisperProcessor.from_pretrained(base_model)
 
     def load_audio(path: Path) -> torch.Tensor:
-        wav, sr = torchaudio.load(str(path))
-        if wav.shape[0] > 1:
-            wav = wav.mean(dim=0, keepdim=True)
+        try:
+            import soundfile as sf
+            data, sr = sf.read(str(path), dtype="float32")
+            wav = torch.from_numpy(data)
+            if wav.ndim > 1:
+                wav = wav.mean(dim=-1)
+        except Exception:
+            try:
+                import av
+                import numpy as np
+                container = av.open(str(path))
+                frames = [f.to_ndarray() for f in container.decode(audio=0)]
+                if not frames:
+                    raise ValueError(f"No audio frames decoded from {path}")
+                raw = np.concatenate(frames, axis=1)
+                sr = container.streams.audio[0].rate
+                if raw.dtype != np.float32:
+                    raw = raw.astype(np.float32)
+                wav = torch.from_numpy(raw)
+                if wav.shape[0] > 1:
+                    wav = wav.mean(dim=0)
+                else:
+                    wav = wav.squeeze(0)
+            except Exception:
+                import wave
+                import numpy as np
+                with wave.open(str(path), "rb") as wf:
+                    sr = wf.getframerate()
+                    raw = wf.readframes(wf.getnframes())
+                    data = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                    wav = torch.from_numpy(data)
         if sr != 16000:
-            wav = torchaudio.functional.resample(wav, sr, 16000)
-        return wav.squeeze(0)
+            wav = torchaudio.functional.resample(wav.unsqueeze(0), sr, 16000).squeeze(0)
+        return wav.squeeze()
 
     rows = []
     for audio_path, text in audio_text_pairs:
