@@ -10,6 +10,7 @@ import { LocalDb } from '../storage/localDb';
 import { useStore } from '../state/store';
 import type { ActionType, PhrasebookEntry } from '../native/types';
 import { SpeechBridge } from '../native/SpeechBridge';
+import { colors } from '../theme/colors';
 
 function inferActionFromTrigger(trigger: string, actionText: string): {
   actionType: ActionType;
@@ -203,7 +204,7 @@ export default function PhrasebookScreen() {
               value={trigger}
               onChangeText={setTrigger}
               placeholder="e.g. call Ravi"
-              placeholderTextColor="#555"
+              placeholderTextColor={colors.textMuted}
             />
             <Text style={styles.label}>Optional note / message body</Text>
             <TextInput
@@ -211,7 +212,7 @@ export default function PhrasebookScreen() {
               value={action}
               onChangeText={setAction}
               placeholder="e.g. Running late"
-              placeholderTextColor="#555"
+              placeholderTextColor={colors.textMuted}
             />
             <View style={styles.modalActions}>
               <TouchableOpacity onPress={() => setModalVisible(false)} style={styles.cancelBtn}>
@@ -229,39 +230,40 @@ export default function PhrasebookScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#0F0F1A', padding: 20 },
-  title: { fontSize: 24, fontWeight: '700', color: '#E8E8FF', marginBottom: 4 },
-  subtitle: { fontSize: 13, color: '#888', marginBottom: 20, lineHeight: 18 },
+  container: { flex: 1, backgroundColor: colors.screenBackground, padding: 20 },
+  title: { fontSize: 24, fontWeight: '700', color: colors.textPrimary, marginBottom: 4 },
+  subtitle: { fontSize: 13, color: colors.textSecondary, marginBottom: 20, lineHeight: 18 },
   list: { paddingBottom: 100 },
-  empty: { color: '#555', textAlign: 'center', marginTop: 60, fontSize: 15 },
+  empty: { color: colors.textMuted, textAlign: 'center', marginTop: 60, fontSize: 15 },
   card: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#1A1A2E', borderRadius: 12, padding: 16, marginBottom: 10,
+    backgroundColor: colors.cardBackground, borderRadius: 12, padding: 16, marginBottom: 10,
+    borderWidth: 1, borderColor: colors.navBorder,
   },
-  phraseText: { color: '#E8E8FF', fontSize: 15, fontWeight: '600' },
-  actionText: { color: '#6C63FF', fontSize: 12, marginTop: 2 },
+  phraseText: { color: colors.textPrimary, fontSize: 15, fontWeight: '600' },
+  actionText: { color: colors.iconCirclePurple, fontSize: 12, marginTop: 2 },
   editBtn: { marginLeft: 8, padding: 8 },
-  editBtnText: { color: '#6C63FF', fontSize: 13 },
+  editBtnText: { color: colors.iconCirclePurple, fontSize: 13 },
   deleteBtn: { marginLeft: 4, padding: 8 },
-  deleteBtnText: { color: '#E74C3C', fontSize: 16 },
+  deleteBtnText: { color: colors.red, fontSize: 16 },
   fab: {
     position: 'absolute', bottom: 32, right: 24,
-    backgroundColor: '#6C63FF', width: 56, height: 56,
+    backgroundColor: colors.iconCirclePurple, width: 56, height: 56,
     borderRadius: 28, justifyContent: 'center', alignItems: 'center',
-    shadowColor: '#6C63FF', shadowOpacity: 0.5, shadowRadius: 12, elevation: 8,
+    shadowColor: colors.navy, shadowOpacity: 0.2, shadowRadius: 12, elevation: 8,
   },
-  fabText: { color: '#fff', fontSize: 28, lineHeight: 32 },
-  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.7)', justifyContent: 'flex-end' },
-  modalCard: { backgroundColor: '#1A1A2E', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28 },
-  modalTitle: { fontSize: 20, fontWeight: '700', color: '#E8E8FF', marginBottom: 20 },
-  label: { fontSize: 12, color: '#888', marginBottom: 6, marginTop: 12 },
+  fabText: { color: colors.white, fontSize: 28, lineHeight: 32 },
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.45)', justifyContent: 'flex-end' },
+  modalCard: { backgroundColor: colors.white, borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 28 },
+  modalTitle: { fontSize: 20, fontWeight: '700', color: colors.textPrimary, marginBottom: 20 },
+  label: { fontSize: 12, color: colors.textSecondary, marginBottom: 6, marginTop: 12 },
   input: {
-    backgroundColor: '#0F0F1A', color: '#E8E8FF', borderRadius: 10,
-    padding: 14, fontSize: 15, borderWidth: 1, borderColor: '#333',
+    backgroundColor: colors.screenBackground, color: colors.textPrimary, borderRadius: 10,
+    padding: 14, fontSize: 15, borderWidth: 1, borderColor: colors.navBorder,
   },
   modalActions: { flexDirection: 'row', marginTop: 24, gap: 12 },
-  cancelBtn: { flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: '#333', alignItems: 'center' },
-  cancelBtnText: { color: '#888', fontSize: 15 },
-  saveBtn: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: '#6C63FF', alignItems: 'center' },
-  saveBtnText: { color: '#fff', fontSize: 15, fontWeight: '700' },
+  cancelBtn: { flex: 1, padding: 14, borderRadius: 10, borderWidth: 1, borderColor: colors.navBorder, alignItems: 'center' },
+  cancelBtnText: { color: colors.textSecondary, fontSize: 15 },
+  saveBtn: { flex: 1, padding: 14, borderRadius: 10, backgroundColor: colors.iconCirclePurple, alignItems: 'center' },
+  saveBtnText: { color: colors.white, fontSize: 15, fontWeight: '700' },
 });

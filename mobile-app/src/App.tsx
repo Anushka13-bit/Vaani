@@ -82,6 +82,7 @@ export default function App() {
     setWakeWordStopReason,
   } = useStore();
   const [ready, setReady] = useState(false);
+  const [onboardingDone, setOnboardingDone] = useState(false);
 
   // Wire up wake word event listeners
   useEffect(() => {
@@ -109,6 +110,10 @@ export default function App() {
   useEffect(() => {
     (async () => {
       try {
+        // ── Onboarding check (must run first, before setReady) ────────────────
+        const completed = await LocalDb.hasCompletedOnboarding();
+        setOnboardingDone(completed);
+
         const settings = await LocalDb.loadSettings();
         if (settings?.preferredLanguage) setPreferredLanguage(settings.preferredLanguage as string);
         if (settings?.correctionSyncOptIn) setCorrectionSyncOptIn(settings.correctionSyncOptIn as boolean);
@@ -217,7 +222,7 @@ export default function App() {
       <StatusBar barStyle="dark-content" backgroundColor="#FFF9F2" />
       <NavigationContainer theme={LIGHT_THEME as any}>
         <Stack.Navigator
-          initialRouteName="Welcome"
+          initialRouteName={onboardingDone ? 'Listening' : 'Welcome'}
           screenOptions={{
             headerStyle: { backgroundColor: '#FFFFFF' },
             headerTintColor: '#111827',

@@ -21,6 +21,7 @@ import {
 } from '../services/adapterService';
 import DeviceInfo from 'react-native-device-info';
 import { LocalDb } from '../storage/localDb';
+import { colors } from '../theme/colors';
 
 const recorder = new AudioRecorderPlayer();
 const POLL_INTERVAL_MS = 3000;
@@ -348,7 +349,7 @@ export default function CalibrationScreen({ navigation }: any) {
   if (phase === 'loading') {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6C63FF" />
+        <ActivityIndicator size="large" color={colors.red} />
         <Text style={styles.subtitle}>Loading calibration prompts…</Text>
       </View>
     );
@@ -373,7 +374,7 @@ export default function CalibrationScreen({ navigation }: any) {
             }
           }}
         >
-          <Text style={styles.btnText}>Use demo cluster adapter</Text>
+          <Text style={[styles.btnText, styles.secondaryBtnText]}>Use demo cluster adapter</Text>
         </TouchableOpacity>
       </View>
     );
@@ -382,7 +383,7 @@ export default function CalibrationScreen({ navigation }: any) {
   if (phase === 'training') {
     return (
       <View style={styles.center}>
-        <ActivityIndicator size="large" color="#6C63FF" />
+        <ActivityIndicator size="large" color={colors.red} />
         <Text style={styles.subtitle}>{trainingMessage}</Text>
         <Text style={styles.hint}>Progress: {trainingProgress}%</Text>
         <Text style={styles.hint}>
@@ -433,7 +434,7 @@ export default function CalibrationScreen({ navigation }: any) {
 
 
       {phase === 'uploading' ? (
-        <ActivityIndicator size="small" color="#6C63FF" style={{ marginTop: 20 }} />
+        <ActivityIndicator size="small" color={colors.red} style={{ marginTop: 20 }} />
       ) : isRecording ? (
         <TouchableOpacity style={[styles.btn, styles.stopBtn]} onPress={stopRecording}>
           <Text style={styles.btnText}>⏹  Stop Recording</Text>
@@ -448,30 +449,90 @@ export default function CalibrationScreen({ navigation }: any) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, padding: 24, backgroundColor: '#0F0F1A', alignItems: 'center' },
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0F0F1A', padding: 24 },
-  title: { fontSize: 24, fontWeight: '700', color: '#E8E8FF', marginBottom: 8 },
-  progress: { fontSize: 13, color: '#888', marginBottom: 24 },
+  container: {
+    flex: 1,
+    padding: 24,
+    backgroundColor: colors.screenBackground,
+    alignItems: 'center',
+  },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: colors.screenBackground,
+    padding: 24,
+  },
+  title: { fontSize: 24, fontWeight: '700', color: colors.textPrimary, marginBottom: 8 },
+  progress: { fontSize: 13, color: colors.textSecondary, marginBottom: 24 },
   promptCard: {
-    backgroundColor: '#1A1A2E', borderRadius: 16, padding: 28,
-    width: '100%', marginBottom: 24,
-    shadowColor: '#6C63FF', shadowOpacity: 0.3, shadowRadius: 12,
+    backgroundColor: colors.cardBackground,
+    borderRadius: 16,
+    padding: 28,
+    width: '100%',
+    marginBottom: 24,
+    borderWidth: 1,
+    borderColor: colors.navBorder,
+    shadowColor: colors.navy,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
   },
-  promptText: { fontSize: 22, color: '#E8E8FF', textAlign: 'center', lineHeight: 32 },
-  hint: { fontSize: 13, color: '#888', textAlign: 'center', marginBottom: 32, paddingHorizontal: 12 },
+  promptText: { fontSize: 22, fontWeight: '600', color: colors.textPrimary, textAlign: 'center', lineHeight: 32 },
+  hint: { fontSize: 13, color: colors.textSecondary, textAlign: 'center', marginBottom: 32, paddingHorizontal: 12 },
   btn: {
-    backgroundColor: '#6C63FF', borderRadius: 12,
-    paddingVertical: 16, paddingHorizontal: 40, marginTop: 8,
+    backgroundColor: colors.navy,
+    borderRadius: 12,
+    paddingVertical: 16,
+    paddingHorizontal: 40,
+    marginTop: 8,
   },
-  secondaryBtn: { backgroundColor: '#444' },
-  stopBtn: { backgroundColor: '#E74C3C' },
-  btnText: { color: '#fff', fontSize: 16, fontWeight: '700' },
-  subtitle: { fontSize: 16, color: '#ccc', marginTop: 12, textAlign: 'center' },
-  errorText: { fontSize: 16, color: '#E74C3C', textAlign: 'center', marginBottom: 24 },
-  doneText: { fontSize: 28, color: '#6C63FF', marginBottom: 12 },
+  secondaryBtn: {
+    backgroundColor: colors.white,
+    borderWidth: 1.5,
+    borderColor: colors.navBorder,
+  },
+  secondaryBtnText: {
+    color: colors.textPrimary,
+  },
+  stopBtn: {
+    backgroundColor: colors.red,
+  },
+  btnText: {
+    color: colors.white,
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  subtitle: {
+    fontSize: 16,
+    color: colors.textSecondary,
+    marginTop: 12,
+    textAlign: 'center',
+  },
+  errorText: {
+    fontSize: 15,
+    color: colors.red,
+    textAlign: 'center',
+    marginBottom: 24,
+  },
+  doneText: {
+    fontSize: 26,
+    fontWeight: '700',
+    color: colors.textPrimary,
+    marginBottom: 12,
+  },
   offlineBadge: {
-    backgroundColor: '#2A1F0A', borderRadius: 8, paddingVertical: 6, paddingHorizontal: 14,
-    marginBottom: 12, borderWidth: 1, borderColor: '#7A5F1A',
+    backgroundColor: colors.peachLight,
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: colors.orangeLight,
   },
-  offlineBadgeText: { fontSize: 12, color: '#C8A93E', fontWeight: '600' },
+  offlineBadgeText: {
+    fontSize: 12,
+    color: colors.orangeDeep,
+    fontWeight: '600',
+  },
 });

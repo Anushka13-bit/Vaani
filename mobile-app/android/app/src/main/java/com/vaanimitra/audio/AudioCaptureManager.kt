@@ -7,6 +7,8 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.util.Log
+import java.io.File
+import java.io.FileOutputStream
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
@@ -33,7 +35,7 @@ class AudioCaptureManager {
             val totalDataLen = pcmBytes.size + 36
             val byteRate = SAMPLE_RATE * 1 * 2 // 16000 * channels * bytesPerSample = 32000
 
-            java.io.FileOutputStream(destFile).use { out ->
+            FileOutputStream(destFile).use { out ->
                 // RIFF chunk descriptor
                 out.write("RIFF".toByteArray())
                 out.write(intToByteArray(totalDataLen))

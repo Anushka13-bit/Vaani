@@ -1,10 +1,11 @@
-﻿import React from 'react';
+import React from 'react';
 import {View, Text, TouchableOpacity, StyleSheet} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
 import Icon from 'react-native-vector-icons/MaterialIcons';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 import type {RootStackParamList} from '../navigation/types';
 import {colors} from '../theme/colors';
+import {LocalDb} from '../storage/localDb';
 import DecorativeBackground from '../components/DecorativeBackground';
 import FeatureItem from '../components/FeatureItem';
 
@@ -52,8 +53,6 @@ const WelcomeScreen: React.FC<Props> = ({navigation}) => {
             </View>
           </View>
 
-          <View style={styles.spacer} />
-
           {/* Three Feature Rows */}
           <View style={styles.features}>
             <FeatureItem
@@ -72,9 +71,12 @@ const WelcomeScreen: React.FC<Props> = ({navigation}) => {
 
           {/* Bottom Get Started Pill Button */}
           <TouchableOpacity
-            style={styles.button}
+            style={[styles.button, styles.buttonPush]}
             activeOpacity={0.85}
-            onPress={() => navigation.navigate('Listening')}>
+            onPress={async () => {
+              await LocalDb.setOnboardingCompleted();
+              navigation.replace('Listening');
+            }}>
             <Text style={styles.buttonText}>Get Started</Text>
             <Icon
               name="arrow-forward"
@@ -101,7 +103,6 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: 24,
     paddingTop: 16,
-    justifyContent: 'space-between',
   },
   headerArea: {
     position: 'relative',
@@ -176,10 +177,14 @@ const styles = StyleSheet.create({
     transform: [{rotate: '35deg'}],
   },
   spacer: {
-    flex: 1,
+    flex: 0,
   },
   features: {
+    marginTop: '18%',
     marginBottom: 28,
+  },
+  buttonPush: {
+    marginTop: 'auto',
   },
   button: {
     height: 54,

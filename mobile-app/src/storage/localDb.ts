@@ -14,6 +14,7 @@ const KEYS = {
   PHRASEBOOK: 'vaani:phrasebook',
   CORRECTIONS: 'vaani:corrections',
   ADAPTERS: 'vaani:active_adapters',
+  ONBOARDING: 'vaani:onboarding_completed',
 } as const;
 
 // ── Auth ──────────────────────────────────────────────────────────────────────
@@ -111,5 +112,18 @@ export const LocalDb = {
 
   async clearActiveAdapters(): Promise<void> {
     await AsyncStorage.removeItem(KEYS.ADAPTERS);
+  },
+
+  // ── Onboarding ──────────────────────────────────────────────────────────────
+
+  /** Returns true if the user has already completed the onboarding flow. */
+  async hasCompletedOnboarding(): Promise<boolean> {
+    const raw = await AsyncStorage.getItem(KEYS.ONBOARDING);
+    return raw === 'true';
+  },
+
+  /** Persist the fact that onboarding is done. Survives app restarts. */
+  async setOnboardingCompleted(): Promise<void> {
+    await AsyncStorage.setItem(KEYS.ONBOARDING, 'true');
   },
 };
