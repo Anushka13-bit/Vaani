@@ -3,6 +3,8 @@ package com.vaanimitra.bridge
 import com.facebook.react.bridge.*
 import com.facebook.react.module.annotations.ReactModule
 import com.vaanimitra.VaaniMitraComponents
+import com.vaanimitra.audio.AudioCaptureManager
+import com.vaanimitra.audio.VoiceActivityDetector
 import com.vaanimitra.nlu.PhrasebookSync
 import com.vaanimitra.stt.AdapterDownloader
 import com.vaanimitra.stt.AdapterHandle
@@ -37,9 +39,79 @@ class SpeechModule(private val reactContext: ReactApplicationContext) :
     private val phrasebookMatcher by lazy { VaaniMitraComponents.phrasebookMatcher() }
     private val scope = CoroutineScope(Dispatchers.Main)
 
+    // Manual "tap mic" capture state (ListeningScreen). Raw AudioRecord PCM, the same
+    // capture path VoicePipeline uses for wake-word-triggered dictation — not
+    // react-native-audio-recorder-player's AAC/M4A output, which transcribeFile() has no
+    // decoder for. One capture at a time; a second start while one is active is rejected
+    // rather than silently abandoning the first.
+    private var manualCapture: AudioCaptureManager? = null
+    private var manualCaptureBuffer: MutableList<Short>? = null
+    private var manualCaptureJob: kotlinx.coroutines.Job? = null
+
     @ReactMethod
     fun ping(promise: Promise) {
         promise.resolve("pong")
+    }
+
+    @ReactMethod
+    fun startManualCapture(promise: Promise) {
+        if (manualCaptureJob?.isActive == true) {
+            promise.reject("ALREADY_CAPTURING", "A manual capture is already in progress")
+            return
+        }
+        val capture = AudioCaptureManager()
+        val buffer = java.util.Collections.synchronizedList(mutableListOf<Short>())
+        manualCapture = capture
+        manualCaptureBuffer = buffer
+        manualCaptureJob = scope.launch(Dispatchers.IO) {
+            try {
+                capture.streamPcm { chunk -> buffer.addAll(chunk.toList()) }
+            } catch (e: Exception) {
+                Log.e(TAG, "Manual capture failed: ${e.message}", e)
+            }
+        }
+        promise.resolve(true)
+    }
+
+    @ReactMethod
+    fun stopManualCaptureAndTranscribe(promise: Promise) {
+        val capture = manualCapture
+        val job = manualCaptureJob
+        if (capture == null || job == null) {
+            promise.reject("NOT_CAPTURING", "No manual capture in progress")
+            return
+        }
+        capture.stopStreaming()
+        scope.launch(Dispatchers.IO) {
+            try {
+                job.join() // wait for AudioRecord.stop()/release() in streamPcm's finally block
+                val raw = manualCaptureBuffer?.toShortArray() ?: ShortArray(0)
+                manualCapture = null
+                manualCaptureBuffer = null
+                manualCaptureJob = null
+
+                val vad = VoiceActivityDetector()
+                val trimmed = vad.trimSilence(raw)
+                if (trimmed.isEmpty() || !vad.hasSpeech(trimmed)) {
+                    promise.reject("NO_SPEECH", "No speech detected in the recording")
+                    return@launch
+                }
+
+                val result = whisperEngine.transcribe(trimmed)
+                val map = Arguments.createMap().apply {
+                    putString("text", result.text)
+                    putDouble("confidence", result.segments.firstOrNull()?.confidence?.toDouble() ?: 0.0)
+                    putString("languageDetected", result.languageDetected)
+                    putString("executionProvider", result.executionProvider)
+                }
+                promise.resolve(map)
+            } catch (e: Exception) {
+                manualCapture = null
+                manualCaptureBuffer = null
+                manualCaptureJob = null
+                promise.reject("TRANSCRIBE_FAILED", e.message, e)
+            }
+        }
     }
 
     @ReactMethod

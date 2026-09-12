@@ -1,7 +1,6 @@
-import React, {useState, useRef, useMemo, useCallback} from 'react';
+import React, {useState, useRef, useCallback} from 'react';
 import {View, Text, StyleSheet, Alert} from 'react-native';
 import {SafeAreaView} from 'react-native-safe-area-context';
-import AudioRecorderPlayer from 'react-native-audio-recorder-player';
 import type {NativeStackScreenProps} from '@react-navigation/native-stack';
 import type {RootStackParamList} from '../navigation/types';
 import {colors} from '../theme/colors';
@@ -30,44 +29,34 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
 
   const [isRecording, setIsRecording] = useState(false);
   const [recordSecs, setRecordSecs] = useState(0);
-  const [metering, setMetering] = useState<number | undefined>(undefined);
   const [lastTranscript, setLastTranscript] = useState<string | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
-  const recorder = useMemo(() => new AudioRecorderPlayer(), []);
   const timerRef = useRef<any>(null);
 
   const handleMicPress = useCallback(async () => {
     if (isRecording) {
-      // Stop recording
+      // Stop recording — raw PCM capture via the native SpeechBridge (the same
+      // AudioCaptureManager + Whisper pipeline VoicePipeline uses for wake-word
+      // dictation), not a recorded file: react-native-audio-recorder-player records
+      // AAC/M4A on Android, which the on-device STT stack has no decoder for.
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+      setIsRecording(false);
+      setStatusMessage('Processing speech…');
       try {
-        if (timerRef.current) {
-          clearInterval(timerRef.current);
-          timerRef.current = null;
-        }
-        const resultUri = await recorder.stopRecorder();
-        recorder.removeRecordBackListener();
-        setMetering(undefined);
-        setIsRecording(false);
-        setStatusMessage('Processing speech…');
-
-        // Attempt transcription via native SpeechBridge
-        try {
-          const res = await SpeechBridge.transcribeFile(resultUri);
-          if (res?.text) {
-            setLastTranscript(res.text);
-            setStatusMessage(`Heard: "${res.text}"`);
-          } else {
-            setStatusMessage('Voice recorded successfully!');
-          }
-        } catch {
-          setStatusMessage('Audio recorded & saved!');
+        const res = await SpeechBridge.stopManualCaptureAndTranscribe();
+        if (res?.text) {
+          setLastTranscript(res.text);
+          setStatusMessage(`Heard: "${res.text}"`);
+        } else {
+          setStatusMessage('No speech detected — try again.');
         }
       } catch (err: any) {
-        setIsRecording(false);
-        setMetering(undefined);
         setStatusMessage(null);
-        Alert.alert('Recording error', err?.message ?? 'Could not stop recording');
+        Alert.alert('Transcription error', err?.message ?? 'Could not transcribe your speech');
       }
     } else {
       // Start recording
@@ -83,24 +72,18 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
         setLastTranscript(null);
         setStatusMessage('Recording… Tap mic again to stop');
         setRecordSecs(0);
-        await recorder.startRecorder(undefined, undefined, true);
-        recorder.addRecordBackListener((e: any) => {
-          if (e?.currentMetering !== undefined) {
-            setMetering(e.currentMetering);
-          }
-        });
+        await SpeechBridge.startManualCapture();
         setIsRecording(true);
         timerRef.current = setInterval(() => {
           setRecordSecs(s => s + 1);
         }, 1000);
       } catch (err: any) {
         setIsRecording(false);
-        setMetering(undefined);
         setStatusMessage(null);
         Alert.alert('Recording error', err?.message ?? 'Could not start recording');
       }
     }
-  }, [isRecording, recorder]);
+  }, [isRecording]);
 
   const getHeading = () => {
     if (isRecording) return `Recording… (${recordSecs}s)`;
@@ -142,7 +125,6 @@ const ListeningScreen: React.FC<Props> = ({navigation}) => {
           <MicrophoneButton
             onPress={handleMicPress}
             isRecording={isRecording}
-            metering={metering}
           />
           <View style={styles.waveformWrapper}>
             <VoiceWaveform />

@@ -84,6 +84,18 @@ export const SpeechBridge = {
   transcribeFile: (audioFilePath: string): Promise<TranscriptionResult> =>
     SpeechModule.transcribeFile(audioFilePath),
 
+  /**
+   * Raw AudioRecord capture — the same on-device pipeline VoicePipeline uses for
+   * wake-word-triggered dictation (AudioCaptureManager + VoiceActivityDetector +
+   * WhisperInferenceEngine). Use this pair for a "tap mic and speak" UI instead of
+   * recording to a file and calling transcribeFile(): react-native-audio-recorder-player
+   * records AAC/M4A on Android, which the native STT stack has no decoder for.
+   */
+  startManualCapture: (): Promise<boolean> => SpeechModule.startManualCapture(),
+
+  stopManualCaptureAndTranscribe: (): Promise<TranscriptionResult> =>
+    SpeechModule.stopManualCaptureAndTranscribe(),
+
   getCurrentAdapterInfo: (): Promise<AdapterHandle[]> =>
     SpeechModule.getCurrentAdapterInfo(),
 
