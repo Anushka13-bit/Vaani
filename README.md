@@ -53,7 +53,8 @@ Mainstream voice assistants have documented failure rates on dysarthric speech. 
 - 🔁 **Active correction loop** — user corrections can sync to the backend for future retraining (opt-in)
 - 👨‍👩‍👧 **Caregiver mode** — PIN-gated screen to review transcripts and manage the phrasebook
 - 🔊 **AAC-lite speak-back** — TTS confirmation before irreversible actions (send/call)
-- 🎤 **Hands-free wake word** — openWakeWord foreground service ("Hey Lily"; dev fallback: "Hey Jarvis")
+- 🎤 **Hands-free wake word** — openWakeWord foreground service running a custom-trained "Hey Barfi" classifier (dev fallback: "Hey Jarvis")
+- 🔁 **Survives backgrounding (with a documented OEM caveat)** — `stopWithTask="false"` + a partial wake lock + a `BOOT_COMPLETED` receiver keep the listener alive across task-removal and reboot; see [Known limitations](#-current-status--limitations) for the one OEM skin where it still stops
 - 📱 **System-wide integration** — works inside every app's keyboard mic, not just inside VaaniMitra
 
 ---
@@ -75,7 +76,7 @@ flowchart TB
         end
 
         subgraph Native["Native Android (Kotlin)"]
-            MIC[Mic + VAD] --> STT["Whisper ONNX<br/>(NNAPI → CPU fallback)"]
+            MIC[Mic + VAD] --> STT["Whisper via sherpa-onnx<br/>(NNAPI-requested → CPU fallback)"]
             STT --> CONF{Confidence}
             CONF -->|Low| CLAR[ClarificationActivity]
             CONF -->|Phrasebook| PB[PhrasebookMatcher]
@@ -114,10 +115,29 @@ flowchart TB
 flowchart LR
     LORA["LoRA weights<br/>(PEFT safetensors)"] --> MERGE["export_whisper_mobile.py<br/>merge + ONNX + optional INT8"]
     MERGE --> ZIP["mobile_bundle.zip"]
-    ZIP -->|GET /v1/adapters/{id}/mobile| DEVICE["OnnxWhisperRuntime<br/>on Android"]
+    ZIP -->|GET /v1/adapters/{id}/mobile| DEVICE["SherpaOnnxWhisperRuntime<br/>on Android"]
 ```
 
 At inference the device loads **one merged ONNX bundle** per adapter — not stacked LoRA at runtime.
+
+### Wake-word service lifecycle (persistence across backgrounding & reboot)
+
+`WakeWordEngine` holds `AudioRecord` continuously while active, so the service that owns it has to survive far more than a normal Activity lifecycle — task removal from Recents, Doze, and device reboot all had to be handled explicitly:
+
+```mermaid
+flowchart TB
+    BOOT[Device boot] -->|BOOT_COMPLETED| BR[WakeWordBootReceiver]
+    BR -->|if was listening before shutdown| SVC[WakeWordForegroundService]
+    APP[App launch / Settings toggle] --> SVC
+    SVC -->|acquire| WL["PARTIAL_WAKE_LOCK<br/>(6h safety-timeout)"]
+    SVC --> ENGINE[WakeWordEngine.start]
+    TASKRM["Task removed<br/>(swipe from Recents)"] -.->|stopWithTask=false, onTaskRemoved override| SVC
+    ENGINE -->|detection| ONDET[onWakeWordDetected]
+    ONDET --> VIBE[Vibrate ack] --> HANDOFF["Pause engine → release AudioRecord<br/>→ VoicePipeline opens its own AudioRecord"]
+    HANDOFF --> RESUME[VoicePipeline completes → ENGINE.start resumes]
+```
+
+**Confirmed real hardware limitation (vivo/OriginOS):** the above keeps the *process* alive and correctly classified as a protected foreground service (`dumpsys activity processes` shows `mAdjType=fg-service-act cached=false`), but on vivo's OriginOS the mic still silently stops receiving audio within seconds of the Activity losing visibility — enforced by a vivo-proprietary layer (likely `com.vivo.abe`, its signature-permission-gated "Application Behavior Engine") below Android's own importance system, with no app-level fix found. See `mobile-app/android/app/src/main/assets/README_WAKEWORD.md` for the full list of things that were tried. **Net effect: treat "Hey Barfi" as reliable while the app is open/foregrounded; the manual tap-mic path has no such limitation.**
 
 ---
 
@@ -125,11 +145,28 @@ At inference the device loads **one merged ONNX bundle** per adapter — not sta
 
 | Mode | How it works |
 |---|---|
-| **Hands-free (primary)** | Toggle "Listen for Hey Lily" in Settings → `WakeWordForegroundService` runs in foreground → vibrate on wake → `VoicePipeline` captures command → ONNX Whisper → intent → TTS-gated action |
+| **Hands-free ("Hey Barfi")** | Toggle in Settings under "Listen for Hey Barfi" → `WakeWordForegroundService` runs in foreground → vibrate on wake → `VoicePipeline` captures command → ONNX Whisper → intent → TTS-gated action. Reliable while the app is open/foregrounded — see the OEM caveat above for backgrounded behavior on some devices. |
+| **Manual tap-to-talk (always available)** | Tap the mic on `ListeningScreen` → same `VoicePipeline` capture → transcribe → act. No backgrounding caveat, since capture only ever starts while the screen is open. |
 | **System dictation (fallback)** | Set VaaniMitra as default voice input → tap the keyboard mic in any app → `PersonalizedRecognitionService` |
-| **Dev wake phrase** | Until `hey_lily.onnx` is trained, the app falls back to **"Hey Jarvis"** (`hey_jarvis_v0.1.onnx`) |
+| **Dev wake phrase fallback** | If `hey_barfi.onnx` is missing from assets (e.g. a fresh clone before running the wake-word setup), the app falls back to **"Hey Jarvis"** (`hey_jarvis_v0.1.onnx`) |
 
 Wake word runs on **CPU** (openWakeWord ONNX). Whisper runs on **NNAPI** with CPU fallback.
+
+### Training a custom wake word ("Hey Barfi")
+
+`hey_barfi.onnx` is trained by fitting openWakeWord's classifier head directly on top of its pretrained melspectrogram/embedding feature extractors — not via openWakeWord's own reference pipeline (which wants Piper TTS, a GPU, and several GB of room-impulse-response/background datasets):
+
+```mermaid
+flowchart LR
+    POS["Positives:<br/>Windows SAPI TTS, every installed voice,<br/>varied rate, saying 'Hey Barfi'"] --> TRAIN[train_wakeword.py]
+    NEG1["Negatives: SAPI-synthesized<br/>adversarial/partial phrases"] --> TRAIN
+    NEG2["Negatives: real recorded speech<br/>(training-backend/sessions/) + silence"] --> TRAIN
+    TRAIN --> MODEL[hey_barfi.onnx]
+    MODEL --> EVAL[eval_wakeword.py]
+    EVAL --> REPORT["training_report.json<br/>30/30 true positives, 0/114 false accepts<br/>(small held-out set — a signal, not a guarantee)"]
+```
+
+Regenerate with `python training-backend/ml/train_wakeword.py` (data-generation scripts live under `training-backend/ml/wakeword/`); both `wakeword_data/` and the model output are gitignored and rebuilt from scratch, not checked in.
 
 ---
 
@@ -139,11 +176,11 @@ Wake word runs on **CPU** (openWakeWord ONNX). Whisper runs on **NNAPI** with CP
 
 ```mermaid
 flowchart LR
-    A["Hey Lily / Hey Jarvis"] --> B[WakeWordForegroundService]
+    A["Hey Barfi / Hey Jarvis"] --> B[WakeWordForegroundService]
     B --> C[Vibrate + VoicePipeline]
     C --> D[Mic + VAD capture]
     D --> E{ONNX bundle loaded?}
-    E -->|Yes| F[OnnxWhisperRuntime]
+    E -->|Yes| F[SherpaOnnxWhisperRuntime]
     E -->|No| G[Google SpeechRecognizer fallback]
     F --> H[ConfidenceScorer]
     G --> H
@@ -181,37 +218,57 @@ Audio never leaves your machine. Set `API_HOST` in `mobile-app/src/config/backen
 .
 ├── mobile-app/                              # React Native 0.74 + embedded Android
 │   ├── src/
-│   │   ├── screens/                         # Calibration, Settings, Phrasebook, Caregiver
+│   │   ├── screens/                         # Listening, Calibration, Settings, Phrasebook, Caregiver
 │   │   ├── native/SpeechBridge.ts           # RN ↔ Kotlin bridge
 │   │   ├── api/trainingBackendClient.ts
 │   │   ├── services/adapterService.ts       # Mobile bundle download + persistence
 │   │   └── App.tsx                          # Boot: auth, restore adapters, wake word
-│   └── android/app/src/main/java/com/vaanimitra/
-│       ├── wakeword/                        # WakeWordForegroundService (openWakeWord)
-│       ├── pipeline/                        # VoicePipeline, ConfirmationGate
-│       ├── stt/                             # OnnxWhisperRuntime, ModelBundleManager
-│       ├── recognition/                     # PersonalizedRecognitionService
-│       ├── nlu/                             # IntentParser, PhrasebookMatcher
-│       ├── actions/                         # ActionExecutor, Android intents
-│       ├── tts/                             # SpeakBackManager
-│       └── bridge/                          # SpeechModule, RecognitionEventEmitter
+│   └── android/app/
+│       ├── libs/                            # sherpa-onnx prebuilt AAR (gitignored, checksum-verified)
+│       └── src/main/
+│           ├── assets/                      # Wake-word ONNX models (gitignored) + README_WAKEWORD.md
+│           └── java/com/vaanimitra/
+│               ├── wakeword/                # WakeWordForegroundService, WakeWordBootReceiver (openWakeWord)
+│               ├── pipeline/                # VoicePipeline, ConfirmationGate
+│               ├── audio/                   # AudioCaptureManager, VoiceActivityDetector
+│               ├── stt/                     # SherpaOnnxWhisperRuntime, ModelBundleManager, AdapterManager
+│               ├── recognition/             # PersonalizedRecognitionService
+│               ├── nlu/                     # IntentParser, PhrasebookMatcher
+│               ├── actions/                 # ActionExecutor, Android intents
+│               ├── tts/                     # SpeakBackManager
+│               └── bridge/                  # SpeechModule, RecognitionEventEmitter
 │
 ├── training-backend/                        # FastAPI service
 │   ├── app/routers/                         # auth, calibration, calibrate, session_adapter, adapters
 │   ├── app/services/session_status.py       # Pollable status.json per session
 │   └── ml/
 │       ├── adapters/                        # LoRA weights + adapter_manifest.json
+│       ├── sherpa_whisper_export/           # HF Whisper → sherpa-onnx KV-cache export helpers
+│       ├── wakeword/                        # SAPI TTS sample-generation scripts (positives/negatives)
+│       ├── wakeword_data/                   # Generated training/eval audio (gitignored, regenerable)
 │       ├── run_finetune.py                  # Local fine-tune + auto ONNX export
+│       ├── run_pipeline.py                  # One-command export → eval → conditional deploy
 │       ├── export_whisper_mobile.py         # LoRA → merged ONNX → mobile_bundle.zip
+│       ├── hf_to_openai_whisper.py          # HF checkpoint → OpenAI Whisper format (for sherpa-onnx export)
+│       ├── train_wakeword.py                # Trains hey_barfi.onnx on openWakeWord's feature extractors
+│       ├── eval_wakeword.py                 # True-positive / false-accept report for hey_barfi.onnx
+│       ├── push_bundle_to_phone.py          # adb-push a mobile bundle without the full pipeline
 │       ├── requirements-training.txt        # torch/peft/datasets for live fine-tune
 │       ├── requirements-export.txt
 │       └── MOBILE_SETUP.md                  # Detailed mobile export guide
 │
 ├── scripts/
-│   └── download_wakeword_models.sh          # openWakeWord ONNX assets → Android assets/
+│   ├── download_wakeword_models.py          # openWakeWord ONNX assets → Android assets/ (cross-platform)
+│   ├── download_sherpa_onnx_aar.py          # Fetches the pinned sherpa-onnx AAR (checksum-verified)
+│   └── generate_wakeword_onnxruntime_shim.py # Patches a renamed libonnxruntime.so so openWakeWord + sherpa-onnx coexist
 │
 ├── technical-implementation-spec.md         # API contracts, schemas, sequence flows
-└── docs/                                    # implementation.md, lit_review.md
+└── docs/
+    ├── SHERPA_ONNX_CONTRACT.md              # Backend↔device contract for the sherpa-onnx migration
+    ├── CALIBRATION_PIPELINE.md              # End-to-end 7-step calibration pipeline spec
+    ├── QNN_INTEGRATION.md                   # Snapdragon NPU (QNN) execution provider — not yet implemented
+    ├── implementation.md
+    └── lit_review.md
 ```
 
 ---
@@ -223,13 +280,13 @@ Audio never leaves your machine. Set `API_HOST` in `mobile-app/src/config/backen
 | Mobile UI | React Native 0.74 (TypeScript), React Navigation |
 | State | Zustand, AsyncStorage |
 | Native Android | Kotlin — `RecognitionService`, `AccessibilityService`, foreground service |
-| STT (on-device) | Whisper-small + merged LoRA → **ONNX Runtime Android 1.17** (NNAPI → CPU) |
-| STT (fallback) | Google `SpeechRecognizer` when no ONNX bundle is loaded |
-| Wake word | **openWakeWord** (`xyz.rementia:openwakeword`) — ONNX on CPU, no API key |
+| STT (on-device) | Whisper-small + merged LoRA → **sherpa-onnx** `OfflineRecognizer` (k2-fsa/sherpa-onnx, prebuilt AAR, NNAPI-requested → CPU fallback) |
+| STT (fallback) | Google `SpeechRecognizer` when no sherpa-onnx bundle is loaded |
+| Wake word | **openWakeWord** (`xyz.rementia:openwakeword`) — ONNX on CPU, no API key; custom "Hey Barfi" classifier head trained on synthetic TTS + real speech (`training-backend/ml/train_wakeword.py`) |
 | Personalization | LoRA via 🤗 `peft` (server-side); merged at export for mobile |
 | TTS | Android system `TextToSpeech` |
 | Backend | Python, FastAPI, SQLAlchemy (SQLite by default) |
-| Export tooling | `optimum`, `onnxruntime`, `transformers`, `peft` (`ml/requirements-export.txt`) |
+| Export tooling | `openai-whisper`, `onnxruntime`, `transformers`, `peft` (`ml/requirements-export.txt`) — see `docs/SHERPA_ONNX_CONTRACT.md` |
 
 ---
 
@@ -266,7 +323,7 @@ Optional `.env`: `SECRET_KEY`, `LIVE_TRAINING_ENABLED=false` (cluster-only mode,
 
 Audio uploads go to your **local** FastAPI server — never a cloud host.
 
-### 2. Export mobile ONNX bundle (required for on-device Whisper)
+### 2. Export mobile sherpa-onnx bundle (required for on-device Whisper)
 
 ```bash
 cd training-backend
@@ -319,9 +376,33 @@ chmod +x scripts/download_wakeword_models.sh
 ```
 </details>
 
-Downloads `melspectrogram.onnx`, `embedding_model.onnx`, and `hey_jarvis_v0.1.onnx` into `mobile-app/android/app/src/main/assets/` (gitignored). Train custom `hey_lily.onnx` per `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`.
+Downloads `melspectrogram.onnx`, `embedding_model.onnx`, and `hey_jarvis_v0.1.onnx` into `mobile-app/android/app/src/main/assets/` (gitignored — these are the shared feature extractors and the dev fallback model).
 
-### 4. Mobile app
+Then train the actual `hey_barfi.onnx` wake word (SAPI-TTS + real-speech negatives, no GPU or Piper needed):
+
+```bash
+cd training-backend
+python ml/train_wakeword.py
+python ml/eval_wakeword.py   # prints true-positive / false-accept report
+```
+
+This writes `hey_barfi.onnx` into `mobile-app/android/app/src/main/assets/`, where the app prefers it over the "Hey Jarvis" fallback. See `mobile-app/android/app/src/main/assets/README_WAKEWORD.md` for the training approach and a documented OEM background-listening limitation (vivo/OriginOS).
+
+### 4. sherpa-onnx Android AAR (one-time after clone)
+
+sherpa-onnx publishes no Maven artifact — this fetches the pinned prebuilt AAR (see `docs/SHERPA_ONNX_CONTRACT.md` for the exact version and why it's pinned) into `mobile-app/android/app/libs/` (gitignored, checksum-verified):
+
+```bash
+python scripts/download_sherpa_onnx_aar.py
+```
+
+sherpa-onnx and openWakeWord each bundle their own, binary-incompatible `libonnxruntime.so` (see `docs/SHERPA_ONNX_CONTRACT.md` — this crashes the app on launch if skipped). Generate the patched shim that lets both coexist:
+
+```bash
+python scripts/generate_wakeword_onnxruntime_shim.py
+```
+
+### 5. Mobile app
 
 ```bash
 cd mobile-app
@@ -333,7 +414,7 @@ npm run android
 
 **On device:**
 1. Complete calibration or Settings → download voice model
-2. Enable **Listen for Hey Lily** (or say **Hey Jarvis** until custom model is trained)
+2. Either say **"Hey Barfi"** (toggle "Listen for Hey Barfi" in Settings; falls back to "Hey Jarvis" if the custom model hasn't been trained yet) or just tap the mic on the Listening screen — both feed the same `VoicePipeline`
 3. Optional fallback: **Settings → Languages & input → Voice input → VaaniMitra**
 
 **If Android build fails** with `rn_edit_text_material 2.xml`, clean macOS duplicate artifacts:
@@ -350,16 +431,20 @@ cd mobile-app/android && ./gradlew clean
 
 | Area | Status |
 |---|---|
-| On-device ONNX Whisper | ✅ `OnnxWhisperRuntime`, mel preprocessing, NNAPI → CPU |
-| Wake word (openWakeWord) | ✅ Implemented; custom `hey_lily.onnx` still to be trained |
+| On-device Whisper (sherpa-onnx) | ✅ `SherpaOnnxWhisperRuntime` — KV-cache encoder/decoder, NNAPI-requested → CPU fallback |
+| Wake word (openWakeWord) | ✅ Custom `hey_barfi.onnx` trained and evaluated (30/30 TP, 0/114 FA on a small held-out set) — see `train_wakeword.py` / `eval_wakeword.py` |
+| Wake-word persistence | ✅ Survives task removal (`stopWithTask=false`) and reboot (`WakeWordBootReceiver`) at the Android process level |
+| Wake-word background listening | ⚠️ Confirmed broken on vivo/OriginOS specifically — the mic stops within seconds of the app losing screen visibility, enforced below Android's own process-importance system (likely `com.vivo.abe`). Reliable while the app is foregrounded; the manual tap-mic path is unaffected. See `README_WAKEWORD.md`. |
+| Manual tap-to-talk | ✅ Always available on `ListeningScreen`, same `VoicePipeline` as wake-word capture |
 | System-wide dictation | ✅ `PersonalizedRecognitionService` |
 | Calibration sample upload | ✅ Multipart to local FastAPI |
 | Live per-user LoRA training | ✅ `run_finetune.py` — TORGO warm-start, encoder frozen, decoder LoRA r=4 |
-| Auto ONNX export after train | ✅ QUInt8 dynamic quant (same scheme as cluster bundle) |
+| sherpa-onnx export after train | ✅ HF→OpenAI conversion + KV-cache ONNX + INT8 quant (same pipeline as CLI export) |
 | Session polling + download | ✅ `GET /v1/adapter/{session_id}/status` + `/adapter/{session_id}` |
 | Cluster fallback | ✅ On training failure, timeout, or `LIVE_TRAINING_ENABLED=false` |
 | iOS | Scaffold only — Android is the target platform |
-| QNN / Snapdragon NPU EP | Not wired — uses ONNX Runtime NNAPI, not Qualcomm QNN |
+| Per-utterance STT confidence | Not available from sherpa-onnx's greedy-search API — see `docs/SHERPA_ONNX_CONTRACT.md`; `ConfidenceScorer` falls back to a text-length heuristic |
+| QNN / Snapdragon NPU EP | Not wired — sherpa-onnx requests NNAPI, not Qualcomm QNN (needs a from-source build against the Qualcomm SDK; see `docs/QNN_INTEGRATION.md`) |
 
 Fine-tune requires `pip install -r ml/requirements-training.txt`. GPU recommended; CPU works but is slower (~minutes for 40 clips).
 
@@ -381,4 +466,4 @@ Fine-tune requires `pip install -r ml/requirements-training.txt`. GPU recommende
 
 Choose and add a license (MIT/Apache-2.0 recommended for the open-source positioning).
 
-**Related docs:** `technical-implementation-spec.md`, `training-backend/ml/MOBILE_SETUP.md`, `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`
+**Related docs:** `technical-implementation-spec.md` · `docs/SHERPA_ONNX_CONTRACT.md` · `docs/CALIBRATION_PIPELINE.md` · `docs/QNN_INTEGRATION.md` · `training-backend/ml/MOBILE_SETUP.md` · `mobile-app/android/app/src/main/assets/README_WAKEWORD.md`
