@@ -30,6 +30,12 @@ training-backend/venv_win/
 training-backend/ml/mobile_export/
 training-backend/sessions/
 
+# Generated wake-word training data (synthetic TTS clips, feature cache, model_out) —
+# regenerable via ml/train_wakeword.py. The actual hey_barfi.onnx this produces is
+# committed separately at mobile-app/android/app/src/main/assets/ (also gitignored,
+# matching every other wake-word model asset — see README_WAKEWORD.md).
+training-backend/ml/wakeword_data/
+
 # ── Node / React Native ───────────────────────────────────────────────────────
 mobile-app/node_modules/
 mobile-app/.expo/
