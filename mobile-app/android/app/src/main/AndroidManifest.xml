@@ -35,6 +35,23 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!-- RECEIVE_BOOT_COMPLETED — lets WakeWordBootReceiver restart hands-free listening
+         after a reboot without the user reopening the app, matching how a system
+         assistant (e.g. "Hey Siri"/"OK Google") behaves. Normal permission, no runtime
+         prompt. -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+
+    <!-- WAKE_LOCK — WakeWordForegroundService holds a partial wake lock while actively
+         listening. Confirmed on real hardware (vivo/OriginOS) that a properly-typed
+         foreground service alone was NOT enough to keep the wake-word coroutine's
+         AudioRecord read loop running once the Activity lost visibility (zero score
+         logs from openWakeWord's per-buffer debug log, which fires ~12x/second when
+         genuinely active) — the OS was silently starving the process's background
+         threads. A held wake lock is the standard, stock-Android signal that tells
+         even aggressive OEM background management "this process has real ongoing
+         work, do not freeze it". -->
+    <uses-permission android:name="android.permission.WAKE_LOCK" />
+
     <!-- SET_ALARM — required by AndroidIntentActions.setAlarm's AlarmClock.ACTION_SET_ALARM
          intent. Normal (not dangerous) permission — declaring it here is enough, no runtime
          request needed. Without it the clock app rejects the intent with a
@@ -110,11 +127,35 @@
             Per spec §7: this service only reads/acts on UI view hierarchy.
             It does NOT access audio, camera, or screen pixels.
         -->
-        <!-- Wake word foreground listener (openWakeWord ONNX — "Hey Barfi") -->
+        <!--
+            Wake word foreground listener (openWakeWord ONNX — "Hey Barfi").
+
+            android:stopWithTask="false" is the actual fix for "listening stops when
+            the app isn't open": stopWithTask DEFAULTS TO TRUE for a service in the
+            app's own task, so swiping VaaniMitra away from Recents was killing this
+            service even though nothing asked it to stop — confirmed on real hardware
+            before this was added. A foreground service with an active notification is
+            otherwise exactly what's supposed to keep running independent of any
+            Activity, which is the whole point of using one here.
+        -->
         <service
             android:name=".wakeword.WakeWordForegroundService"
             android:exported="false"
-            android:foregroundServiceType="microphone" />
+            android:foregroundServiceType="microphone"
+            android:stopWithTask="false" />
+
+        <!-- Restarts wake-word listening after a reboot if it was running before
+             shutdown — see WakeWordBootReceiver. Starting a foreground service from a
+             BOOT_COMPLETED receiver is an explicitly allowed exemption to Android's
+             background-start restrictions. -->
+        <receiver
+            android:name=".wakeword.WakeWordBootReceiver"
+            android:exported="false"
+            android:enabled="true">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+            </intent-filter>
+        </receiver>
 
         <activity
             android:name=".ui.ClarificationActivity"

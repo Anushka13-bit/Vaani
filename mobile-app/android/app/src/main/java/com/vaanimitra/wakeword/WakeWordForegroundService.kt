@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import android.os.IBinder
+import android.os.PowerManager
 import android.os.VibrationEffect
 import android.os.Vibrator
 import android.util.Log
@@ -60,29 +61,79 @@ class WakeWordForegroundService : Service() {
         const val ACTION_START = "com.vaanimitra.wakeword.START"
         const val ACTION_STOP  = "com.vaanimitra.wakeword.STOP"
 
+        private const val PREFS_NAME = "vaani_wakeword"
+        private const val KEY_SHOULD_RUN = "should_run"
+
         @Volatile var isRunning = false
 
         /** Exposed so SpeechModule can surface it to React Native. */
         @Volatile var lastStopReason: String = ""
+
+        /**
+         * Native-side record of "was wake-word listening on when this last changed",
+         * independent of whether the RN JS layer (and its AsyncStorage-backed
+         * `wakeWordEnabled` setting) is even alive to ask. WakeWordBootReceiver reads
+         * this after a reboot — RN hasn't started yet at that point, so this has to be
+         * something plain Kotlin can check on its own.
+         */
+        fun setShouldRun(context: Context, shouldRun: Boolean) {
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .edit().putBoolean(KEY_SHOULD_RUN, shouldRun).apply()
+        }
+
+        fun shouldRunOnBoot(context: Context): Boolean =
+            context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+                .getBoolean(KEY_SHOULD_RUN, false)
     }
 
     private var wakeWordEngine: WakeWordEngine? = null
     private val sessionController = VoiceSessionController()
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var detectionJob: Job? = null
+    private var wakeLock: PowerManager.WakeLock? = null
 
     override fun onBind(intent: Intent?): IBinder? = null
+
+    /**
+     * openWakeWord's AudioRecorder read loop (Dispatchers.IO, no Activity/UI dependency
+     * whatsoever — verified by reading its source) simply stopped producing its
+     * per-buffer debug log the moment MainActivity lost visibility, on real hardware,
+     * even with a correctly-typed foreground service and notification already running.
+     * That is the OS suspending the process's background threads outright, not the
+     * audio going quiet — silence still logs a near-zero score every ~80ms. A held
+     * partial wake lock is the standard signal that keeps this from happening.
+     */
+    private fun acquireWakeLock() {
+        if (wakeLock?.isHeld == true) return
+        val pm = getSystemService(Context.POWER_SERVICE) as PowerManager
+        wakeLock = pm.newWakeLock(
+            PowerManager.PARTIAL_WAKE_LOCK,
+            "VaaniMitra:WakeWordListening",
+        ).apply {
+            setReferenceCounted(false)
+            acquire(6 * 60 * 60 * 1000L /* 6h safety timeout — never hold forever if release() is missed */)
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let { if (it.isHeld) it.release() }
+        wakeLock = null
+    }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         when (intent?.action) {
             ACTION_STOP -> {
+                setShouldRun(applicationContext, false)
                 stopListening()
+                releaseWakeLock()
                 lastStopReason = ""
                 stopSelf()
                 return START_NOT_STICKY
             }
             else -> {
+                setShouldRun(applicationContext, true)
                 startForeground(NOTIFICATION_ID, buildNotification())
+                acquireWakeLock()
                 startListening()
                 return START_STICKY
             }
@@ -233,8 +284,23 @@ class WakeWordForegroundService : Service() {
         isRunning = false
     }
 
+    /**
+     * Called when the user swipes VaaniMitra away from Recents. Without
+     * android:stopWithTask="false" on this service's manifest declaration, the OS
+     * stops the service right after this callback regardless of what happens here —
+     * that attribute is the actual fix (confirmed missing on real hardware: listening
+     * silently died on task removal even though nothing asked it to). This override
+     * exists purely so that expectation is visible in logs rather than the service
+     * just quietly continuing to run with no record of why the task went away.
+     */
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        Log.i(TAG, "App task removed from Recents — listening continues (stopWithTask=false)")
+        super.onTaskRemoved(rootIntent)
+    }
+
     override fun onDestroy() {
         stopListening()
+        releaseWakeLock()
         scope.cancel()
         super.onDestroy()
     }
